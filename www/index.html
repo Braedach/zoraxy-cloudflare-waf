@@ -24,7 +24,7 @@
   button.secondary { background: #444; }
   button.secondary:hover { background: #222; }
   table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
-  th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #eee; }
+  th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #eee; overflow-wrap: anywhere; }
   .result-blocked { color: #b00; font-weight: 600; }
   .result-dry-run { color: #a66a00; }
   .result-skipped-disabled, .result-skipped-duplicate, .result-skipped-invalid-ip { color: #888; }
@@ -41,11 +41,62 @@
   .meter-fill { background: #f38020; height: 100%; }
   .meter-fill.danger { background: #b00; }
   code { background: #f2f2f2; padding: 0.1rem 0.3rem; border-radius: 3px; }
+  details.help { border: 1px solid #ddd; border-radius: 6px; padding: 0.6rem 1rem; margin-bottom: 1.5rem; font-size: 0.85rem; line-height: 1.5; }
+  details.help summary { cursor: pointer; font-weight: 600; }
+  details.help h3 { font-size: 0.9rem; margin: 0.9rem 0 0.2rem; }
+  details.help ul { margin: 0.3rem 0 0 1.1rem; padding: 0; }
+  details.help li { margin-bottom: 0.25rem; }
 </style>
 </head>
 <body>
 <h1>Zoraxy Cloudflare WAF plugin</h1>
 <div class="sub">Mirrors abusive clients from Zoraxy's access log and blacklist events into a Cloudflare IP List.</div>
+
+<details class="help">
+  <summary>How this works (read this first)</summary>
+
+  <h3>What it does</h3>
+  <ul>
+    <li>Follows Zoraxy's access log (from the moment the plugin starts) and, if ticked, Zoraxy's own blacklist events.</li>
+    <li>A client IP becomes a block candidate when a request looks like an exploit probe (path traversal, <code>/etc/passwd</code>,
+      <code>.env</code> backups, actuator endpoints, etc.), or after more than the threshold of 4xx/5xx responses within the window
+      (see <em>Detection thresholds</em>).</li>
+    <li>Private, loopback and Cloudflare's own addresses are never blocked. An IP already actioned is skipped until the
+      re-block cooldown passes.</li>
+  </ul>
+
+  <h3>Off, dry run, live</h3>
+  <ul>
+    <li><strong>Enabled off</strong> — nothing is acted on.</li>
+    <li><strong>Enabled + Dry run</strong> — decisions are recorded and logged but <strong>nothing is sent to Cloudflare</strong>.
+      This is the safe way to watch what it would do.</li>
+    <li><strong>Enabled, Dry run off (live)</strong> — the first real block creates the IP list and one WAF custom rule in
+      Cloudflare (if they don't exist), then adds the IP to the list. <em>Until then Cloudflare shows nothing new — that's expected.</em></li>
+  </ul>
+
+  <h3>Where to see what it's doing</h3>
+  <ul>
+    <li>The <em>Recent actions</em> table at the bottom of this page (kept in memory — it empties when Zoraxy or the plugin restarts).</li>
+    <li>The Zoraxy journal, which keeps history: <code>journalctl -u zoraxy -f | grep -F "Zoraxy Cloudflare WAF plugin"</code>.
+      A "logtail: alive" line appears every 30 minutes as a heartbeat.</li>
+  </ul>
+
+  <h3>Names — two different fields</h3>
+  <ul>
+    <li><strong>IP list name</strong> is a machine name Cloudflare uses inside the rule expression: letters, digits and underscores only,
+      no spaces.</li>
+    <li><strong>WAF rule name</strong> is just the label in Cloudflare's Security Rules list — spaces and capitals are fine.
+      <strong>Make it unique.</strong> If a rule with exactly this name already exists in your zone, this plugin will take it over and
+      replace its expression and action.</li>
+  </ul>
+
+  <h3>Good to know</h3>
+  <ul>
+    <li><em>Test Connection</em> checks what is typed in the boxes but does not save it — click <em>Save</em> afterwards.</li>
+    <li>A changed <em>Block action</em> reaches Cloudflare at the next real block, not when you save.</li>
+    <li>Changes to the log directory or detection thresholds need the plugin to be restarted.</li>
+  </ul>
+</details>
 
 <div id="setupBanner" class="banner warn" style="display:none">
   <strong>Setup required.</strong> Fill in the Cloudflare section below and click <em>Test Connection</em>.
@@ -97,6 +148,7 @@
 
     <button type="button" id="testBtn" class="secondary">Test Connection</button>
     <span id="testStatus"></span>
+    <div class="limits">Tests the values currently typed above without saving them — click <em>Save</em> afterwards.</div>
 
     <label for="listName" style="margin-top:1rem">IP list name</label>
     <input type="text" id="listName">
@@ -105,6 +157,8 @@
 
     <label for="ruleDescription">WAF rule name (shown in Cloudflare's Security Rules dashboard)</label>
     <input type="text" id="ruleDescription">
+    <div class="limits">Free text — spaces and capitals are fine, no underscores needed. <strong>Must be unique:</strong> a rule already
+      called exactly this in your zone would be overwritten by this plugin. Example: <code>Zoraxy Cloudflare WAF plugin - IP blocklist</code>.</div>
     <label for="blockAction">Block action</label>
     <select id="blockAction">
       <option value="block">block — hard block</option>
