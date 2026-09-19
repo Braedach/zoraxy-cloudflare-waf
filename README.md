@@ -86,9 +86,25 @@ account ID and zone ID there directly, rather than hand-editing the JSON.
 | Account | `Account Filter Lists` → **Edit** | create/update the IP list |
 | Zone | `WAF` → **Edit** | create/update the one custom rule referencing that list |
 
-Scope both to the specific account and the specific zone `alex` proxies for — not "All
-accounts" / "All zones". Both the Account ID and Zone ID are on the zone's **Overview**
-page in the Cloudflare dashboard, right-hand sidebar.
+Further down the same form:
+
+- **Account Resources** → `Include` → your specific account by name, not "All accounts".
+- **Zone Resources** → `Include` → the specific zone `alex` proxies for, not "All zones".
+- **Client IP Address Filtering** (optional) → leave blank for the first deploy. This
+  restricts which source IP the API calls may come from - since the plugin runs *on*
+  `alex`, that means `alex`'s WAN egress IP, **not** whatever machine you're creating the
+  token from (don't click "Use my IP" unless you're on the same connection `alex`
+  egresses through). A locked-down IP filter is good extra hardening once you know that
+  IP is stable, but a home ISP rotating it would fail every API call until you noticed
+  and updated the token — not something to add before the plugin's proven itself.
+
+Both the account "All accounts" would otherwise cover, and the specific zone, are the
+minimum blast radius this token needs: even a fully leaked token can only touch this one
+account's IP lists and this one zone's WAF rules, nothing else in your Cloudflare account.
+
+Both the Account ID and Zone ID (for the plugin's own config, separate from the token
+scoping above) are on the zone's **Overview** page in the Cloudflare dashboard, right-hand
+sidebar.
 
 Paste the token into the plugin's UI, then click **Test Connection** before doing anything
 else — it checks the token is valid and that both scopes actually work (a live, read-only
