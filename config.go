@@ -26,12 +26,35 @@ type Config struct {
 
 	// IPListName is the single Cloudflare IP List this plugin owns. One custom rule
 	// referencing "ip.src in $<IPListName>" covers unlimited IPs from one rule slot -
-	// see README for why this matters on a 5-rule plan.
+	// see README for why this matters on a 5-rule plan. Cloudflare list names must be
+	// alphanumeric/underscore only, max 50 chars.
 	IPListName string `json:"ip_list_name"`
+
+	// RuleDescription is what shows up in the "Name" column of Cloudflare's Security
+	// Rules dashboard (the Ruleset Engine API has no separate "name" field - description
+	// *is* the display name). User-editable; the plugin tracks its own rule by
+	// ManagedRuleID once created, so renaming this here safely updates the existing rule
+	// instead of creating a duplicate.
+	RuleDescription string `json:"rule_description"`
+
+	// ManagedRuleID is the Cloudflare-assigned ID of the custom rule this plugin created,
+	// persisted after first creation so subsequent syncs update it by ID rather than by
+	// matching description text (robust against the rule being renamed by hand in the
+	// Cloudflare dashboard). Not user-edited - the UI shows it read-only.
+	ManagedRuleID string `json:"managed_rule_id,omitempty"`
 
 	// BlockAction is the Cloudflare action applied by the custom rule this plugin
 	// ensures exists. "block" or "managed_challenge".
 	BlockAction string `json:"block_action"`
+
+	// MaxIPListItems is this plugin's OWN pre-flight guard against Cloudflare's list
+	// size cap, checked before every add so a full list fails softly (recorded as
+	// "skipped-list-full" in the action log) instead of erroring against the API. Default
+	// matches the documented Free/Pro/Business account-wide cap of 10,000 items across
+	// all custom lists (developers.cloudflare.com/waf/tools/lists/lists-api/) - raise it
+	// only if your plan's actual limit is higher; this does not change what Cloudflare
+	// itself enforces, it only makes our own behavior fail predictably.
+	MaxIPListItems int `json:"max_ip_list_items"`
 
 	// ZoraxyLogDir is where Zoraxy writes zr_YYYY-M.log files (see
 	// Proxmox/LXC/Scripts/forensic-report-zoraxy-v2.sh in the homelab repo for the
@@ -61,13 +84,22 @@ func defaultConfig() Config {
 		Enabled:                false,
 		DryRun:                 true,
 		IPListName:             "zoraxy_cf_waf_blocklist",
+		RuleDescription:        "Zoraxy CF WAF Sync - managed IP blocklist",
 		BlockAction:            "block",
+		MaxIPListItems:         10000,
 		ZoraxyLogDir:           "/srv/zoraxy/log",
 		RateLimitWindowSeconds: 60,
 		RateLimitThreshold:     30,
 		ReactToBlacklistEvent:  true,
 		BlockTTLHours:          24,
 	}
+}
+
+// Configured reports whether enough is filled in to talk to Cloudflare at all. The UI
+// uses this to gate the "Enabled" toggle behind a successful Test Connection first -
+// see main.go's /ui/api/test handler.
+func (c Config) Configured() bool {
+	return c.CloudflareAPIToken != "" && c.CloudflareAccountID != "" && c.CloudflareZoneID != ""
 }
 
 // configStore guards Config with a mutex since it's read by the log tailer / event

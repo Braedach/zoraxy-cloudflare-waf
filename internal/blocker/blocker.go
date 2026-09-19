@@ -29,19 +29,23 @@ type Action struct {
 	IP     string    `json:"ip"`
 	Reason string    `json:"reason"`
 	Source string    `json:"source"`
-	Result string    `json:"result"` // "blocked" | "dry-run" | "skipped-disabled" | "skipped-duplicate" | "skipped-invalid-ip" | "error"
+	Result string    `json:"result"` // "blocked" | "dry-run" | "skipped-disabled" | "skipped-duplicate" | "skipped-invalid-ip" | "skipped-list-full" | "error"
 	Detail string    `json:"detail,omitempty"`
 }
 
 // Deps is read fresh on every candidate so config changes made in the UI take effect
 // immediately, without restarting the plugin.
 type Deps struct {
-	GetEnabled     func() bool
-	GetDryRun      func() bool
-	GetTTL         func() time.Duration
-	GetIPListName  func() string
-	GetBlockAction func() string
-	NewCFClient    func() (*cloudflare.Client, bool) // ok=false if credentials aren't configured yet
+	GetEnabled         func() bool
+	GetDryRun          func() bool
+	GetTTL             func() time.Duration
+	GetIPListName      func() string
+	GetBlockAction     func() string
+	GetRuleDescription func() string
+	GetManagedRuleID   func() string
+	SetManagedRuleID   func(id string) // persists the rule ID EnsureBlockRule returns, so future syncs match by ID
+	GetMaxListItems    func() int
+	NewCFClient        func() (*cloudflare.Client, bool) // ok=false if credentials aren't configured yet
 }
 
 type Blocker struct {
@@ -138,10 +142,27 @@ func (b *Blocker) Submit(ctx context.Context, c Candidate) {
 		return
 	}
 
-	if err := client.EnsureBlockRule(ctx, b.deps.GetIPListName(), b.deps.GetBlockAction()); err != nil {
+	// Pre-flight against Cloudflare's list-size cap (Free/Pro/Business: 10,000 items
+	// total across all custom lists - see Config.MaxIPListItems). Checked live, right
+	// before the add, rather than cached: blocks are rare enough (thanks to the dedup
+	// TTL above) that one extra read here per real block is cheap, and it's always
+	// accurate rather than staleness-prone.
+	if count, err := client.ListIPListItemCount(ctx, listID); err != nil {
+		log.Printf("block %s: list size check failed (continuing anyway): %v", normalizedIP, err)
+	} else if max := b.deps.GetMaxListItems(); max > 0 && count >= max {
+		action.Result = "skipped-list-full"
+		action.Detail = fmt.Sprintf("list %s has %d/%d items", b.deps.GetIPListName(), count, max)
+		b.record(action)
+		log.Printf("block %s: skipped, list full (%d/%d)", normalizedIP, count, max)
+		return
+	}
+
+	if newRuleID, err := client.EnsureBlockRule(ctx, b.deps.GetIPListName(), b.deps.GetBlockAction(), b.deps.GetRuleDescription(), b.deps.GetManagedRuleID()); err != nil {
 		// Non-fatal: the list membership below still protects, just via whatever rule
 		// (if any) already references this list. Surface it, don't abort the add.
 		log.Printf("block %s: ensure rule (continuing anyway): %v", normalizedIP, err)
+	} else if newRuleID != b.deps.GetManagedRuleID() {
+		b.deps.SetManagedRuleID(newRuleID)
 	}
 
 	comment := fmt.Sprintf("zoraxy/%s: %s", c.Source, c.Reason)

@@ -5,12 +5,32 @@ log and blacklist events for abusive clients, and mirrors them into a Cloudflare
 List** referenced by a single custom WAF rule — so Cloudflare's edge blocks them before
 they ever reach the proxy again.
 
-## Why not a per-IP custom rule?
+## Cloudflare limits, and how this plugin manages them
 
-Cloudflare's plans cap custom rules (5 on Free/Pro). This plugin maintains one IP List
-and ensures exactly one persistent rule exists referencing it
-(`ip.src in $<your_list_name>`) — unlimited IPs, one rule slot, and it never touches any
-other rule you've configured by hand.
+These numbers are Cloudflare's own current documented limits (Free/Pro/Business — verify
+against your actual plan, these can change):
+
+| Limit | Value | Source |
+|---|---|---|
+| Custom rules per zone | 5 | [Cloudflare Community](https://community.cloudflare.com/t/number-of-waf-firewall-rules-allowed-on-free-accounts/593171) |
+| Expression length per rule | 4,096 characters | [Cloudflare Community](https://community.cloudflare.com/t/number-of-waf-firewall-rules-allowed-on-free-accounts/593171) |
+| IP list items, account-wide | 10,000 across all custom lists | [Lists API docs](https://developers.cloudflare.com/waf/tools/lists/lists-api/) |
+
+**Why one IP List instead of a rule per IP, or IPs inline in a rule expression:** a rule
+listing raw IPs (`ip.src eq 1.2.3.4 or ip.src eq 5.6.7.8 or ...`) hits the 4,096-character
+expression cap after roughly 100-150 IPv4 addresses. This plugin instead maintains one
+Cloudflare **IP List** and ensures exactly one persistent custom rule references it —
+`(ip.src in $<your_list_name>)`, ~30-40 characters regardless of how many IPs the list
+holds. That sidesteps the expression-length cap entirely and uses exactly one of your five
+rule slots no matter how many IPs get blocked. It never touches any other rule you've
+configured by hand (matched/updated by the Cloudflare-assigned rule ID once created, not
+by scanning-and-guessing).
+
+**The real ceiling is the list's 10,000-item cap**, not the rule. `Config.MaxIPListItems`
+(default 10,000) is this plugin's own pre-flight guard — checked live before every add, so
+a full list fails softly (`skipped-list-full` in the action log) instead of erroring
+against the Cloudflare API. There's no automatic pruning yet (see Status below) — a list
+that fills up needs a manual trim in the Cloudflare dashboard until that's built.
 
 ## How it works
 
@@ -51,11 +71,30 @@ scp cloudflarewaf.example.json \
   alex:/srv/zoraxy/plugins/com.braedach.zoraxy.cloudflarewaf/cloudflarewaf.json
 ```
 
-Edit `cloudflarewaf.json` on `alex` with a **scoped** Cloudflare API token (`Account →
-Rulesets → Edit`, `Zone → Firewall Services → Edit` — not the Global API Key), account ID
-and zone ID. Then, from Zoraxy's admin UI, enable the plugin — it'll show up under
-Plugins, with its own settings page for everything else (enable/dry-run toggle,
-thresholds, IP list name, block action).
+Then, from Zoraxy's admin UI, enable the plugin — it'll show up under Plugins, with its own
+settings page (`Config → Cloudflare` fieldset) for the rest of the setup: paste the token,
+account ID and zone ID there directly, rather than hand-editing the JSON.
+
+### Creating a correctly scoped API token
+
+**Never use the Global API Key.** At
+[dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens) →
+**Create Custom Token**, grant exactly these two permissions and nothing more:
+
+| Scope | Permission | Why |
+|---|---|---|
+| Account | `Account Filter Lists` → **Edit** | create/update the IP list |
+| Zone | `WAF` → **Edit** | create/update the one custom rule referencing that list |
+
+Scope both to the specific account and the specific zone `alex` proxies for — not "All
+accounts" / "All zones". Both the Account ID and Zone ID are on the zone's **Overview**
+page in the Cloudflare dashboard, right-hand sidebar.
+
+Paste the token into the plugin's UI, then click **Test Connection** before doing anything
+else — it checks the token is valid and that both scopes actually work (a live, read-only
+check: it does not create or modify anything), and reports exactly which one is missing if
+either fails. **The `Enabled` toggle stays disabled until a test succeeds** — server-side,
+not just in the UI, so there's no way to accidentally flip it on unconfigured.
 
 **Defaults are deliberately inert**: `enabled: false` and `dry_run: true` out of the box.
 Nothing calls Cloudflare until you flip both on from the plugin's UI, after reviewing what
@@ -63,13 +102,16 @@ it would have done in the recent-actions log.
 
 ## Status
 
-v0.1 — scaffolded and smoke-tested standalone (introspect output, config persistence, UI,
-status API all verified). **Not yet tested against a real Cloudflare zone** — the
+v0.1 — scaffolded and smoke-tested standalone: introspect output, config persistence, UI,
+status API, setup gating (server-side, not just client-side), and a live `/api/test` round
+trip to Cloudflare's real API (confirmed it fails gracefully on bad credentials) all
+verified. **Not yet tested against a real, correctly-scoped Cloudflare zone** — the
 `internal/cloudflare` client is written to the documented API shapes but wants a live
-smoke test with a scoped token before `dry_run` gets switched off for real.
+smoke test with a real scoped token before `dry_run` gets switched off for real.
 
-Not yet implemented: unblocking / list pruning, and folding in the `Fail2ban/` filter
-rules from the homelab repo as an additional pattern source (planned next).
+Not yet implemented: unblocking / list pruning (a full list currently just stops accepting
+new blocks rather than evicting old ones), and folding in the `Fail2ban/` filter rules from
+the homelab repo as an additional pattern source (planned next).
 
 ## Licensing note
 

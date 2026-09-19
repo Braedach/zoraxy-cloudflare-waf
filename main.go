@@ -71,14 +71,24 @@ func main() {
 	go refreshCloudflareRangesForever(checker)
 
 	deps := blocker.Deps{
-		GetEnabled:     func() bool { return cfgStore.get().Enabled },
-		GetDryRun:      func() bool { return cfgStore.get().DryRun },
-		GetTTL:         func() time.Duration { return time.Duration(cfgStore.get().BlockTTLHours) * time.Hour },
-		GetIPListName:  func() string { return cfgStore.get().IPListName },
-		GetBlockAction: func() string { return cfgStore.get().BlockAction },
+		GetEnabled:         func() bool { return cfgStore.get().Enabled },
+		GetDryRun:          func() bool { return cfgStore.get().DryRun },
+		GetTTL:             func() time.Duration { return time.Duration(cfgStore.get().BlockTTLHours) * time.Hour },
+		GetIPListName:      func() string { return cfgStore.get().IPListName },
+		GetBlockAction:     func() string { return cfgStore.get().BlockAction },
+		GetRuleDescription: func() string { return cfgStore.get().RuleDescription },
+		GetManagedRuleID:   func() string { return cfgStore.get().ManagedRuleID },
+		SetManagedRuleID: func(id string) {
+			c := cfgStore.get()
+			c.ManagedRuleID = id
+			if err := cfgStore.set(c); err != nil {
+				log.Printf("persisting managed_rule_id: %v", err)
+			}
+		},
+		GetMaxListItems: func() int { return cfgStore.get().MaxIPListItems },
 		NewCFClient: func() (*cloudflare.Client, bool) {
 			c := cfgStore.get()
-			if c.CloudflareAPIToken == "" || c.CloudflareAccountID == "" || c.CloudflareZoneID == "" {
+			if !c.Configured() {
 				return nil, false
 			}
 			return cloudflare.New(c.CloudflareAccountID, c.CloudflareZoneID, c.CloudflareAPIToken), true
@@ -183,16 +193,60 @@ func registerUI(cfgStore *configStore, blk *blocker.Blocker) {
 			http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		current := cfgStore.get()
 		// A blank token in the incoming payload means "leave the stored one alone" -
 		// the redacted GET response never round-trips the real token back to the form.
 		if incoming.CloudflareAPIToken == "" {
-			incoming.CloudflareAPIToken = cfgStore.get().CloudflareAPIToken
+			incoming.CloudflareAPIToken = current.CloudflareAPIToken
 		}
+		// managed_rule_id is bookkeeping the blocker owns (see SetManagedRuleID) - the
+		// form never sends it, so always carry the stored value forward rather than
+		// letting a save silently wipe it and orphan the rule Cloudflare already has.
+		incoming.ManagedRuleID = current.ManagedRuleID
+
+		// Server-side enforcement of "must be tested before it can run for real" -
+		// mirrors the UI's own gating but doesn't rely on it, since the UI can be
+		// bypassed by anyone hitting this endpoint directly.
+		if incoming.Enabled && !incoming.Configured() {
+			http.Error(w, "cannot enable: cloudflare_api_token, cloudflare_account_id and cloudflare_zone_id must all be set first", http.StatusBadRequest)
+			return
+		}
+
 		if err := cfgStore.set(incoming); err != nil {
 			http.Error(w, "failed to save: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, redactedConfig(cfgStore.get()))
+	}, nil)
+
+	uiRouter.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// Accepts the same shape as /api/config so the UI can test credentials the user
+		// just typed, before saving them - a blank token in the request means "test the
+		// currently saved one" instead.
+		var incoming struct {
+			CloudflareAPIToken  string `json:"cloudflare_api_token"`
+			CloudflareAccountID string `json:"cloudflare_account_id"`
+			CloudflareZoneID    string `json:"cloudflare_zone_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
+			http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		current := cfgStore.get()
+		token := incoming.CloudflareAPIToken
+		if token == "" {
+			token = current.CloudflareAPIToken
+		}
+		if token == "" || incoming.CloudflareAccountID == "" || incoming.CloudflareZoneID == "" {
+			http.Error(w, "api token, account id and zone id are all required to test", http.StatusBadRequest)
+			return
+		}
+		client := cloudflare.New(incoming.CloudflareAccountID, incoming.CloudflareZoneID, token)
+		writeJSON(w, client.TestCapabilities(r.Context(), current.IPListName))
 	}, nil)
 
 	uiRouter.AttachHandlerToMux(nil)
