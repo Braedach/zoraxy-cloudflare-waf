@@ -218,14 +218,28 @@ function showSaveBanner(ok, text) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+let lastHistoryKey = null;
+
 function fillHistory(history) {
-  const tbody = document.querySelector("#historyTable tbody");
-  tbody.innerHTML = "";
+  const table = document.getElementById("historyTable");
+  const key = JSON.stringify(history || []);
+  if (key === lastHistoryKey) return; // nothing new - leave the table alone so text stays selectable/copyable
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed && table.contains(sel.anchorNode)) return; // user is selecting/copying; try again next poll
+
+  lastHistoryKey = key;
+  const tbody = table.querySelector("tbody");
+  tbody.textContent = "";
   (history || []).slice().reverse().forEach(a => {
     const tr = document.createElement("tr");
-    const cls = "result-" + (a.result || "").replace(/[^a-z-]/g, "");
-    tr.innerHTML = `<td>${new Date(a.time).toLocaleString()}</td><td>${a.ip}</td>` +
-      `<td class="${cls}">${a.result}</td><td>${a.source}</td><td>${a.reason}</td><td>${a.detail || ""}</td>`;
+    // textContent, never innerHTML: reason/detail can carry attacker-controlled text (e.g. the requested URL
+    // from a Zoraxy blacklist event, or an error string), and this page runs inside the admin session.
+    [new Date(a.time).toLocaleString(), a.ip, a.result, a.source, a.reason, a.detail || ""].forEach((text, i) => {
+      const td = document.createElement("td");
+      td.textContent = text;
+      if (i === 2) td.className = "result-" + String(a.result || "").replace(/[^a-z-]/g, "");
+      tr.appendChild(td);
+    });
     tbody.appendChild(tr);
   });
 }
