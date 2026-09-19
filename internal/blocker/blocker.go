@@ -82,6 +82,18 @@ func (b *Blocker) record(a Action) {
 		b.history = b.history[len(b.history)-historyLimit:]
 	}
 	b.mu.Unlock()
+
+	// Every outcome goes to the journal too (Zoraxy captures plugin stdout), so `journalctl -u zoraxy`
+	// shows what the plugin is doing and it survives a restart - the UI table is in-memory only.
+	// skipped-duplicate is left out: a scanner hammering one IP would flood the journal, and the first
+	// hit for that IP already has its line (the UI table still lists every one).
+	if a.Result != "skipped-duplicate" {
+		detail := ""
+		if a.Detail != "" {
+			detail = fmt.Sprintf(" detail=%q", a.Detail)
+		}
+		log.Printf("action: %s ip=%s source=%s reason=%q%s", a.Result, a.IP, a.Source, a.Reason, detail)
+	}
 }
 
 // Submit evaluates one candidate and, if warranted, calls Cloudflare. Safe to call
@@ -121,7 +133,6 @@ func (b *Blocker) Submit(ctx context.Context, c Candidate) {
 		action.Result = "dry-run"
 		action.Detail = "would have added to " + b.deps.GetIPListName()
 		b.record(action)
-		log.Printf("[dry-run] would block %s (%s / %s)", normalizedIP, c.Source, c.Reason)
 		return
 	}
 
@@ -138,7 +149,6 @@ func (b *Blocker) Submit(ctx context.Context, c Candidate) {
 		action.Result = "error"
 		action.Detail = err.Error()
 		b.record(action)
-		log.Printf("block %s: ensure list: %v", normalizedIP, err)
 		return
 	}
 
@@ -153,7 +163,6 @@ func (b *Blocker) Submit(ctx context.Context, c Candidate) {
 		action.Result = "skipped-list-full"
 		action.Detail = fmt.Sprintf("list %s has %d/%d items", b.deps.GetIPListName(), count, max)
 		b.record(action)
-		log.Printf("block %s: skipped, list full (%d/%d)", normalizedIP, count, max)
 		return
 	}
 
@@ -173,11 +182,9 @@ func (b *Blocker) Submit(ctx context.Context, c Candidate) {
 		action.Result = "error"
 		action.Detail = err.Error()
 		b.record(action)
-		log.Printf("block %s: add ip: %v", normalizedIP, err)
 		return
 	}
 
 	action.Result = "blocked"
 	b.record(action)
-	log.Printf("blocked %s (%s / %s)", normalizedIP, c.Source, c.Reason)
 }

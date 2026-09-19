@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -52,7 +53,14 @@ type Tailer struct {
 
 	mu      sync.Mutex
 	windows map[string][]time.Time // ip -> timestamps of recent noisy statuses, for the sliding window
+
+	// Counters for the periodic heartbeat line - proof in the journal that the tailer is alive
+	// and reading even when nothing suspicious has happened.
+	linesRead  atomic.Int64
+	candidates atomic.Int64
 }
+
+const heartbeatEvery = 30 * time.Minute
 
 func New(cfg Config, onEvent func(Candidate)) *Tailer {
 	if cfg.PollInterval == 0 {
@@ -81,11 +89,18 @@ func (t *Tailer) Run(stop <-chan struct{}) {
 
 	ticker := time.NewTicker(t.cfg.PollInterval)
 	defer ticker.Stop()
+	heartbeat := time.NewTicker(heartbeatEvery)
+	defer heartbeat.Stop()
+	var lastOpenErrPath string
 
 	for {
 		select {
 		case <-stop:
 			return
+		case <-heartbeat.C:
+			log.Printf("logtail: alive - following %s, %d lines read, %d candidates raised since start",
+				curPath, t.linesRead.Load(), t.candidates.Load())
+			continue
 		case <-ticker.C:
 		}
 
@@ -95,7 +110,12 @@ func (t *Tailer) Run(stop <-chan struct{}) {
 			newFile, err := os.Open(expectedPath)
 			if err != nil {
 				// Not necessarily an error - the new month's file may not exist yet in
-				// the first seconds of the month, or LogDir may be misconfigured.
+				// the first seconds of the month, or LogDir may be misconfigured. Say so once per
+				// path (not every poll) so a wrong log dir is visible in the journal.
+				if expectedPath != lastOpenErrPath {
+					log.Printf("logtail: cannot open %s: %v (will keep retrying)", expectedPath, err)
+					lastOpenErrPath = expectedPath
+				}
 				continue
 			}
 			if file != nil {
@@ -110,6 +130,9 @@ func (t *Tailer) Run(stop <-chan struct{}) {
 			}
 			reader = bufio.NewReader(file)
 			curPath = expectedPath
+			lastOpenErrPath = ""
+			log.Printf("logtail: following %s from end of file (candidate = exploit pattern, or %d 4xx/5xx within %ds)",
+				curPath, t.cfg.Threshold, t.cfg.WindowSeconds)
 		}
 
 		if reader == nil {
@@ -135,6 +158,7 @@ func (t *Tailer) currentLogPath() string {
 }
 
 func (t *Tailer) handleLine(line string) {
+	t.linesRead.Add(1)
 	clientMatch := clientRe.FindStringSubmatch(line)
 	if clientMatch == nil {
 		return
@@ -142,6 +166,7 @@ func (t *Tailer) handleLine(line string) {
 	ip := clientMatch[1]
 
 	if exploitRe.MatchString(line) {
+		t.candidates.Add(1)
 		t.onEvent(Candidate{IP: ip, Reason: "exploit-pattern-match in request line"})
 		return
 	}
@@ -156,6 +181,7 @@ func (t *Tailer) handleLine(line string) {
 	}
 
 	if t.recordNoisyAndCheckThreshold(ip) {
+		t.candidates.Add(1)
 		t.onEvent(Candidate{
 			IP:     ip,
 			Reason: fmt.Sprintf("more than %d 4xx/5xx responses within %ds", t.cfg.Threshold, t.cfg.WindowSeconds),

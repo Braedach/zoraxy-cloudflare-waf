@@ -67,6 +67,7 @@ func main() {
 		panic(fmt.Errorf("loading %s: %w", CONFIG_FILE, err))
 	}
 	log.Printf("zoraxy-cloudflare-waf starting against Zoraxy %s (uuid %s)", runtimeCfg.RuntimeConst.ZoraxyVersion, runtimeCfg.RuntimeConst.ZoraxyUUID)
+	logConfigSummary("loaded config", cfgStore.get())
 
 	checker := ipfilter.NewChecker()
 	go refreshCloudflareRangesForever(checker)
@@ -225,6 +226,7 @@ func registerUI(cfgStore *configStore, blk *blocker.Blocker) {
 			http.Error(w, "failed to save: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		logConfigSummary("config saved", incoming)
 		writeJSON(w, redactedConfig(cfgStore.get()))
 	}, nil)
 
@@ -255,10 +257,20 @@ func registerUI(cfgStore *configStore, blk *blocker.Blocker) {
 			return
 		}
 		client := cloudflare.New(incoming.CloudflareAccountID, incoming.CloudflareZoneID, token)
-		writeJSON(w, client.TestCapabilities(r.Context(), current.IPListName))
+		report := client.TestCapabilities(r.Context(), current.IPListName)
+		log.Printf("test connection: token_valid=%v lists_access=%v waf_access=%v list_exists=%v",
+			report.TokenValid, report.ListsAccess, report.WAFAccess, report.ListExists)
+		writeJSON(w, report)
 	}, nil)
 
 	uiRouter.AttachHandlerToMux(nil)
+}
+
+// logConfigSummary writes the settings that decide whether the plugin acts, never the credentials
+// themselves (only whether they are present).
+func logConfigSummary(prefix string, c Config) {
+	log.Printf("%s: enabled=%v dry_run=%v block_action=%s ip_list=%s react_to_blacklist=%v log_dir=%s credentials_set=%v",
+		prefix, c.Enabled, c.DryRun, c.BlockAction, c.IPListName, c.ReactToBlacklistEvent, c.ZoraxyLogDir, c.Configured())
 }
 
 func redactedConfig(c Config) Config {
