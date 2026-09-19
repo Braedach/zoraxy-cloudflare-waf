@@ -41,6 +41,10 @@
   .meter-fill { background: #f38020; height: 100%; }
   .meter-fill.danger { background: #b00; }
   code { background: #f2f2f2; padding: 0.1rem 0.3rem; border-radius: 3px; }
+  .secret-row { display: flex; align-items: center; gap: 0.5rem; max-width: 420px; }
+  .secret-row input { flex: 1; min-width: 0; }
+  button.reveal { margin-top: 0; padding: 0.35rem 0.7rem; background: #666; }
+  button.reveal:hover { background: #333; }
   details.help { border: 1px solid #ddd; border-radius: 6px; padding: 0.6rem 1rem; margin-bottom: 1.5rem; font-size: 0.85rem; line-height: 1.5; }
   details.help summary { cursor: pointer; font-weight: 600; }
   details.help h3 { font-size: 0.9rem; margin: 0.9rem 0 0.2rem; }
@@ -132,7 +136,10 @@
     <legend>Cloudflare</legend>
     <div id="credStatus" class="limits" style="margin-bottom:0.5rem"></div>
     <label for="apiToken">API token</label>
-    <input type="password" id="apiToken" placeholder="leave blank to keep the currently stored token">
+    <div class="secret-row">
+      <input type="password" id="apiToken" autocomplete="new-password" spellcheck="false" placeholder="leave blank to keep the currently stored token">
+      <button type="button" class="reveal" data-target="apiToken">Show</button>
+    </div>
     <div class="limits">
       Needs a scoped token (never the Global API Key) with exactly two permissions:
       <code>Account → Account Filter Lists → Edit</code> and <code>Zone → WAF → Edit</code>, scoped to this account
@@ -141,10 +148,17 @@
       → "Create Custom Token".
     </div>
     <label for="accountId">Account ID</label>
-    <input type="text" id="accountId">
+    <div class="secret-row">
+      <input type="password" id="accountId" autocomplete="new-password" spellcheck="false">
+      <button type="button" class="reveal" data-target="accountId">Show</button>
+    </div>
     <label for="zoneId">Zone ID</label>
-    <input type="text" id="zoneId">
-    <div class="limits">Both IDs are on the zone's Overview page in the Cloudflare dashboard, right-hand sidebar.</div>
+    <div class="secret-row">
+      <input type="password" id="zoneId" autocomplete="new-password" spellcheck="false">
+      <button type="button" class="reveal" data-target="zoneId">Show</button>
+    </div>
+    <div class="limits">Both IDs are on the zone's Overview page in the Cloudflare dashboard, right-hand sidebar. They are masked
+      like the token (safer on a shared screen) — use <em>Show</em> to check them; they re-hide after 15 seconds.</div>
 
     <button type="button" id="testBtn" class="secondary">Test Connection</button>
     <span id="testStatus"></span>
@@ -219,6 +233,26 @@ function describeFailure(res) {
   }
   return "HTTP " + res.status + ": " + ((res.body && res.body.error) || res.text || "empty response");
 }
+
+// Masked fields (token, account ID, zone ID): Show reveals one for 15s, then it re-hides. Also hidden on
+// Save and whenever the tab loses focus, so nothing stays on screen for a shoulder-surfer.
+function setReveal(btn, show) {
+  const input = document.getElementById(btn.dataset.target);
+  input.type = show ? "text" : "password";
+  btn.textContent = show ? "Hide" : "Show";
+  clearTimeout(btn.hideTimer);
+  if (show) btn.hideTimer = setTimeout(() => setReveal(btn, false), 15000);
+}
+
+function hideSecrets() {
+  document.querySelectorAll("button.reveal").forEach(b => setReveal(b, false));
+}
+
+document.querySelectorAll("button.reveal").forEach(btn => {
+  btn.addEventListener("click", () => setReveal(btn, document.getElementById(btn.dataset.target).type === "password"));
+});
+document.addEventListener("visibilitychange", () => { if (document.hidden) hideSecrets(); });
+window.addEventListener("blur", hideSecrets);
 
 function updateEnabledGate(configured) {
   const enabledBox = document.getElementById("enabled");
@@ -368,6 +402,7 @@ document.getElementById("saveBtn").addEventListener("click", () => {
   const saveBtn = document.getElementById("saveBtn");
   saveStatus.textContent = "Saving...";
   saveBtn.disabled = true;
+  hideSecrets();
   const payload = {
     enabled: document.getElementById("enabled").checked,
     dry_run: document.getElementById("dryRun").checked,
