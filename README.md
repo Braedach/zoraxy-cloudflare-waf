@@ -23,8 +23,10 @@ Cloudflare **IP List** and ensures exactly one persistent custom rule references
 `(ip.src in $<your_list_name>)`, ~30-40 characters regardless of how many IPs the list
 holds. That sidesteps the expression-length cap entirely and uses exactly one of your five
 rule slots no matter how many IPs get blocked. It never touches any other rule you've
-configured by hand (matched/updated by the Cloudflare-assigned rule ID once created, not
-by scanning-and-guessing).
+configured by hand — with one caveat: the plugin recognises *its own* rule by the Cloudflare-assigned
+rule ID once it has created it, but until that first real block (no ID stored yet) it looks for an
+existing rule with exactly the same **WAF rule name** (`rule_description`) and takes that over. So give
+the plugin's rule a name that no rule of yours already uses.
 
 **The real ceiling is the list's 10,000-item cap**, not the rule. `Config.MaxIPListItems`
 (default 10,000) is this plugin's own pre-flight guard — checked live before every add, so
@@ -77,9 +79,12 @@ scp cloudflarewaf.example.json \
 Zoraxy 3.3.4 rejects it with `no valid entry point found` otherwise. Zoraxy only scans the plugins
 folder at startup, so restart Zoraxy after the first install.
 
-Then, from Zoraxy's admin UI, enable the plugin — it'll show up under Plugins, with its own
-settings page (`Config → Cloudflare` fieldset) for the rest of the setup: paste the token,
-account ID and zone ID there directly, rather than hand-editing the JSON.
+Then, from Zoraxy's admin UI, enable the plugin and open its page (under the Plugins section). Do the
+rest of the setup there — paste the token, account ID and zone ID directly, rather than hand-editing the
+JSON. The page has a collapsible **How this works** section that covers the same ground as this README.
+The token, account ID and zone ID fields are masked (use **Show**; they re-hide after 15 seconds).
+
+To pick up a replaced binary, restart Zoraxy — it only loads plugin binaries at startup.
 
 ### Creating a correctly scoped API token
 
@@ -115,12 +120,46 @@ sidebar.
 Paste the token into the plugin's UI, then click **Test Connection** before doing anything
 else — it checks the token is valid and that both scopes actually work (a live, read-only
 check: it does not create or modify anything), and reports exactly which one is missing if
-either fails. **The `Enabled` toggle stays disabled until a test succeeds** — server-side,
-not just in the UI, so there's no way to accidentally flip it on unconfigured.
+either fails. Test Connection checks whatever is currently typed in the boxes and does **not** save it —
+click **Save** afterwards. **The `Enabled` toggle stays locked until credentials are in place** (saved, or
+a Test Connection has just succeeded), and the server refuses to save `enabled: true` unless the token,
+account ID and zone ID are all set — so it can't be switched on unconfigured.
 
 **Defaults are deliberately inert**: `enabled: false` and `dry_run: true` out of the box.
-Nothing calls Cloudflare until you flip both on from the plugin's UI, after reviewing what
-it would have done in the recent-actions log.
+- **Enabled off** — nothing is acted on.
+- **Enabled + Dry run** — every decision is recorded and logged, but **nothing is written to Cloudflare**
+  (the only call the plugin makes to your Cloudflare account is Test Connection's read-only check; it also
+  downloads Cloudflare's public edge IP ranges, used to avoid ever blocking Cloudflare itself).
+- **Enabled, Dry run off** — live. The first real block creates the IP list and the WAF rule if they don't
+  exist yet, then adds the IP. Until then Cloudflare shows nothing new; that is expected.
+
+Review what it *would* have done (below) before turning Dry run off.
+
+### Names: IP list vs WAF rule
+
+Two different settings, easy to mix up:
+
+- **IP list name** — the machine name Cloudflare uses inside the rule expression (`ip.src in $<name>`).
+  Letters, digits and underscores only, max 50, no spaces (Save rejects anything else). Default
+  `zoraxy_cf_waf_blocklist`.
+- **WAF rule name** — free-text label shown in Cloudflare's Security Rules list; spaces and capitals are
+  fine. **Make it unique** — see the caveat in [Cloudflare limits](#cloudflare-limits-and-how-this-plugin-manages-them).
+
+### Seeing what it is doing
+
+- The **Recent actions** table on the plugin's page. It is in memory only — it empties whenever the plugin
+  or Zoraxy restarts.
+- The Zoraxy journal, which keeps history (Zoraxy captures the plugin's output):
+
+  ```bash
+  journalctl -u zoraxy -f | grep -F "Zoraxy Cloudflare WAF plugin"
+  ```
+
+  You'll see the config summary at startup (never the credentials — only whether they're set),
+  `logtail: following <file>`, one `action: <result> ip=… source=… reason=… detail=…` line per decision
+  (`blocked`, `dry-run`, `error`, `skipped-invalid-ip`, `skipped-disabled`, `skipped-list-full`; repeat
+  hits for an already-actioned IP are left out of the journal but still appear in the table), and a
+  `logtail: alive` heartbeat every 30 minutes with lines-read / candidates-raised counters.
 
 ### Block action
 
@@ -148,12 +187,13 @@ the CSRF token (injected into the page as `{{.csrfToken}}`) back in an **`X-CSRF
 
 ## Status
 
-v0.1 — scaffolded and smoke-tested standalone: introspect output, config persistence, UI,
-status API, setup gating (server-side, not just client-side), and a live `/api/test` round
-trip to Cloudflare's real API (confirmed it fails gracefully on bad credentials) all
-verified. **Not yet tested against a real, correctly-scoped Cloudflare zone** — the
-`internal/cloudflare` client is written to the documented API shapes but wants a live
-smoke test with a real scoped token before `dry_run` gets switched off for real.
+v0.1. Verified on Zoraxy 3.3.4 (linux/amd64): introspect output, plugin load, config persistence, the UI
+(save, masking, validation, action log), the status API, setup gating, journal logging, log-tail detection
+end to end (an exploit-pattern request is detected and correctly refused as a private address), and Test
+Connection against a real, correctly-scoped Cloudflare token (token valid, IP-list access, WAF access).
+**Not yet exercised: the live write path** — creating the IP list and WAF rule and adding an IP against a real
+zone. The `internal/cloudflare` client is written to the documented API shapes but has only been run in
+dry-run mode so far; treat live mode as unproven until you've watched a first block yourself.
 
 Not yet implemented: unblocking / list pruning (a full list currently just stops accepting
 new blocks rather than evicting old ones), and folding in the `Fail2ban/` filter rules from
