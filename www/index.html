@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Cloudflare WAF Sync</title>
+<title>Zoraxy Cloudflare WAF plugin</title>
 <style>
   body { font-family: system-ui, sans-serif; margin: 1.5rem; color: #1a1a1a; }
   h1 { font-size: 1.25rem; margin-bottom: 0.25rem; }
@@ -44,7 +44,7 @@
 </style>
 </head>
 <body>
-<h1>Cloudflare WAF Sync</h1>
+<h1>Zoraxy Cloudflare WAF plugin</h1>
 <div class="sub">Mirrors abusive clients from Zoraxy's access log and blacklist events into a Cloudflare IP List.</div>
 
 <div id="setupBanner" class="banner warn" style="display:none">
@@ -174,9 +174,16 @@ function fillHistory(history) {
   });
 }
 
-function refresh() {
+// Only the initial load fills the form fields. The periodic poll must not, or it wipes whatever
+// the user has typed but not saved yet (e.g. account/zone IDs) every few seconds.
+function refresh(fillFields) {
   fetch("api/status").then(r => r.json()).then(data => {
-    fillForm(data.config);
+    if (fillFields) {
+      fillForm(data.config);
+    } else {
+      const cfg = data.config;
+      updateEnabledGate(!!(cfg.cloudflare_api_token && cfg.cloudflare_account_id && cfg.cloudflare_zone_id));
+    }
     fillHistory(data.history);
   }).catch(e => console.error(e));
 }
@@ -251,8 +258,8 @@ document.getElementById("cfgForm").addEventListener("submit", (e) => {
     .catch(e => { document.getElementById("saveStatus").textContent = e.message; });
 });
 
-refresh();
-setInterval(refresh, 5000);
+refresh(true);
+setInterval(() => refresh(false), 5000);
 </script>
 </body>
 </html>

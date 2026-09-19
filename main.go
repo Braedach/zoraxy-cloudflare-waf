@@ -39,7 +39,7 @@ var wwwFS embed.FS
 func main() {
 	runtimeCfg, err := plugin.ServeAndRecvSpec(&plugin.IntroSpect{
 		ID:            PLUGIN_ID,
-		Name:          "Cloudflare WAF Sync",
+		Name:          "Zoraxy Cloudflare WAF plugin",
 		Author:        "Braedach",
 		AuthorContact: "https://github.com/Braedach",
 		Description:   "Watches Zoraxy's access log and blacklist events, and mirrors abusive client IPs into a Cloudflare IP List referenced by a custom WAF rule.",
