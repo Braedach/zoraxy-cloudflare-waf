@@ -130,10 +130,29 @@
 const csrfToken = "{{.csrfToken}}";
 let lastTestPassed = false;
 
+// Zoraxy hands the token to the plugin in an inbound X-Zoraxy-Csrf header (embedded above via
+// {{.csrfToken}}), but its gorilla/csrf layer reads it back from X-CSRF-Token on non-GET requests.
 function withCsrf(headers) {
   headers = headers || {};
-  headers["X-Zoraxy-Csrf"] = csrfToken;
+  headers["X-CSRF-Token"] = csrfToken;
   return headers;
+}
+
+// Zoraxy's CSRF/auth layer and this plugin's own http.Error paths reply in plain text, not JSON,
+// so read the body as text first instead of letting r.json() throw a cryptic parse error.
+function readResponse(r) {
+  return r.text().then(text => {
+    let body = null;
+    try { body = JSON.parse(text); } catch (e) { /* not JSON */ }
+    return { ok: r.ok, status: r.status, body, text: text.trim() };
+  });
+}
+
+function describeFailure(res) {
+  if (res.status === 403 && /csrf/i.test(res.text)) {
+    return "Zoraxy rejected the request (" + res.text + "). Reload this page (or log in to Zoraxy again) and retry.";
+  }
+  return "HTTP " + res.status + ": " + ((res.body && res.body.error) || res.text || "empty response");
 }
 
 function updateEnabledGate(configured) {
@@ -198,12 +217,13 @@ document.getElementById("testBtn").addEventListener("click", () => {
   const banner = document.getElementById("testResultBanner");
   statusEl.textContent = "Testing...";
   fetch("api/test", { method: "POST", headers: withCsrf({ "Content-Type": "application/json" }), body: JSON.stringify(payload) })
-    .then(r => r.json().then(body => ({ ok: r.ok, body })))
-    .then(({ ok, body }) => {
+    .then(readResponse)
+    .then(res => {
+      const { ok, body } = res;
       statusEl.textContent = "";
-      if (!ok) {
+      if (!ok || !body) {
         banner.className = "banner error";
-        banner.textContent = body.error || "Test failed.";
+        banner.textContent = describeFailure(res);
         banner.style.display = "block";
         return;
       }
