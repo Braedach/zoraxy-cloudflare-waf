@@ -206,6 +206,13 @@ func registerUI(cfgStore *configStore, blk *blocker.Blocker) {
 		// letting a save silently wipe it and orphan the rule Cloudflare already has.
 		incoming.ManagedRuleID = current.ManagedRuleID
 
+		if incoming.IPListName == "" {
+			incoming.IPListName = defaultConfig().IPListName
+		}
+		if !validIPListName(incoming.IPListName) {
+			http.Error(w, fmt.Sprintf("invalid ip_list_name %q: Cloudflare list names may only contain letters, digits and underscores (max 50 characters, no spaces) - e.g. %s. Put a friendly display name in the WAF rule name field instead.", incoming.IPListName, defaultConfig().IPListName), http.StatusBadRequest)
+			return
+		}
 		if incoming.BlockAction == "" {
 			incoming.BlockAction = defaultConfig().BlockAction
 		}

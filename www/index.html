@@ -55,6 +55,7 @@
 </div>
 <div id="testResultBanner" style="display:none"></div>
 <div id="saveBanner" style="display:none"></div>
+<div id="listNameWarning" class="banner error" style="display:none"></div>
 
 <form id="cfgForm">
   <fieldset id="behaviourFieldset">
@@ -99,6 +100,7 @@
 
     <label for="listName" style="margin-top:1rem">IP list name</label>
     <input type="text" id="listName">
+    <div class="limits">Letters, digits and underscores only (max 50, no spaces), e.g. <code>zoraxy_cf_waf_blocklist</code>. This is the machine name Cloudflare uses in the rule; the friendly display name goes in <em>WAF rule name</em> below.</div>
     <div id="listUsage" class="limits" style="display:none"></div>
 
     <label for="ruleDescription">WAF rule name (shown in Cloudflare's Security Rules dashboard)</label>
@@ -187,6 +189,16 @@ function fillForm(cfg) {
   actionSel.value = cfg.block_action || "block";
   if (actionSel.value !== (cfg.block_action || "block")) actionSel.value = "block"; // stored value isn't one of the options
   document.getElementById("maxListItems").value = cfg.max_ip_list_items || 10000;
+
+  const nameWarn = document.getElementById("listNameWarning");
+  if (cfg.ip_list_name && !/^[A-Za-z0-9_]{1,50}$/.test(cfg.ip_list_name)) {
+    nameWarn.textContent = "The stored IP list name \"" + cfg.ip_list_name + "\" is not valid for Cloudflare (letters, digits and " +
+      "underscores only, no spaces). Nothing is affected while Dry run is on, but the first real block would fail. " +
+      "Change it below (e.g. zoraxy_cf_waf_blocklist) and click Save.";
+    nameWarn.style.display = "block";
+  } else {
+    nameWarn.style.display = "none";
+  }
 
   const mark = v => v ? "<strong>✓ saved</strong>" : "✗ not saved";
   document.getElementById("credStatus").innerHTML =

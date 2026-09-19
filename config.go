@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"sync"
 )
 
@@ -92,6 +93,13 @@ func validBlockAction(a string) bool {
 	}
 	return false
 }
+
+// ipListNameRe is Cloudflare's rule for custom list names (letters, digits, underscore, max 50). The name
+// is interpolated into the rule expression as `ip.src in $<name>`, so a space or other character makes
+// the expression invalid and the first real block fail.
+var ipListNameRe = regexp.MustCompile(`^[A-Za-z0-9_]{1,50}$`)
+
+func validIPListName(n string) bool { return ipListNameRe.MatchString(n) }
 
 func defaultConfig() Config {
 	return Config{
