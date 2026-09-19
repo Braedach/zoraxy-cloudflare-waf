@@ -54,6 +54,7 @@
   create a correctly scoped token. Zoraxy's plugin frame blocks link clicks, so copy the address.
 </div>
 <div id="testResultBanner" style="display:none"></div>
+<div id="saveBanner" style="display:none"></div>
 
 <form id="cfgForm">
   <fieldset id="behaviourFieldset">
@@ -77,6 +78,7 @@
 
   <fieldset>
     <legend>Cloudflare</legend>
+    <div id="credStatus" class="limits" style="margin-bottom:0.5rem"></div>
     <label for="apiToken">API token</label>
     <input type="password" id="apiToken" placeholder="leave blank to keep the currently stored token">
     <div class="limits">
@@ -186,8 +188,22 @@ function fillForm(cfg) {
   if (actionSel.value !== (cfg.block_action || "block")) actionSel.value = "block"; // stored value isn't one of the options
   document.getElementById("maxListItems").value = cfg.max_ip_list_items || 10000;
 
+  const mark = v => v ? "<strong>✓ saved</strong>" : "✗ not saved";
+  document.getElementById("credStatus").innerHTML =
+    "Stored on the server — API token: " + mark(cfg.cloudflare_api_token) +
+    " · Account ID: " + mark(cfg.cloudflare_account_id) + " · Zone ID: " + mark(cfg.cloudflare_zone_id);
+
   const configured = !!(cfg.cloudflare_api_token && cfg.cloudflare_account_id && cfg.cloudflare_zone_id);
   updateEnabledGate(configured);
+}
+
+function showSaveBanner(ok, text) {
+  const b = document.getElementById("saveBanner");
+  b.className = "banner " + (ok ? "ok" : "error");
+  b.textContent = text;
+  b.style.display = "block";
+  b.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function fillHistory(history) {
@@ -269,7 +285,9 @@ document.getElementById("cfgForm").addEventListener("submit", (e) => e.preventDe
 
 document.getElementById("saveBtn").addEventListener("click", () => {
   const saveStatus = document.getElementById("saveStatus");
+  const saveBtn = document.getElementById("saveBtn");
   saveStatus.textContent = "Saving...";
+  saveBtn.disabled = true;
   const payload = {
     enabled: document.getElementById("enabled").checked,
     dry_run: document.getElementById("dryRun").checked,
@@ -289,12 +307,21 @@ document.getElementById("saveBtn").addEventListener("click", () => {
   fetch("api/config", { method: "POST", headers: withCsrf({ "Content-Type": "application/json" }), body: JSON.stringify(payload) })
     .then(readResponse)
     .then(res => {
-      if (!res.ok || !res.body) { saveStatus.textContent = "Save failed - " + describeFailure(res); return; }
+      if (!res.ok || !res.body) {
+        const msg = "Save failed - " + describeFailure(res);
+        saveStatus.textContent = msg;
+        showSaveBanner(false, msg);
+        return;
+      }
       fillForm(res.body);
-      saveStatus.textContent = "Saved.";
-      setTimeout(() => { if (saveStatus.textContent === "Saved.") saveStatus.textContent = ""; }, 3000);
+      document.getElementById("apiToken").value = ""; // stored now; the placeholder shows it's set
+      const when = new Date().toLocaleTimeString();
+      saveStatus.textContent = "✓ Saved at " + when;
+      showSaveBanner(true, "✓ Settings saved at " + when + (res.body.enabled ? " — plugin is ENABLED" : " — plugin is not enabled yet") +
+        (res.body.dry_run ? " (dry run: nothing is sent to Cloudflare)." : " (LIVE: blocks are sent to Cloudflare)."));
     })
-    .catch(e => { saveStatus.textContent = "Save failed - " + e.message; });
+    .catch(e => { const msg = "Save failed - " + e.message; saveStatus.textContent = msg; showSaveBanner(false, msg); })
+    .finally(() => { saveBtn.disabled = false; });
 });
 
 refresh(true);
