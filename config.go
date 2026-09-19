@@ -44,7 +44,7 @@ type Config struct {
 	ManagedRuleID string `json:"managed_rule_id,omitempty"`
 
 	// BlockAction is the Cloudflare action applied by the custom rule this plugin
-	// ensures exists. "block" or "managed_challenge".
+	// ensures exists - one of validBlockActions.
 	BlockAction string `json:"block_action"`
 
 	// MaxIPListItems is this plugin's OWN pre-flight guard against Cloudflare's list
@@ -77,6 +77,20 @@ type Config struct {
 	// it's willing to action it again (dedup, not an unblock - Cloudflare list removal
 	// is a separate, manual/future feature).
 	BlockTTLHours int `json:"block_ttl_hours"`
+}
+
+// validBlockActions are the Cloudflare custom-rule actions this plugin will put on its managed rule.
+// "log" only works on Enterprise plans and blocks nothing; "skip" is deliberately absent (it is an
+// allow-list action and needs action_parameters this plugin doesn't send).
+var validBlockActions = []string{"block", "managed_challenge", "js_challenge", "challenge", "log"}
+
+func validBlockAction(a string) bool {
+	for _, v := range validBlockActions {
+		if a == v {
+			return true
+		}
+	}
+	return false
 }
 
 func defaultConfig() Config {

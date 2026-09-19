@@ -287,7 +287,8 @@ type rule struct {
 
 // EnsureBlockRule makes sure exactly one custom rule exists on the zone's
 // http_request_firewall_custom phase referencing listName, with the given action
-// ("block" or "managed_challenge") and description (shown as the rule's "Name" in
+// (any custom-rule action the caller has validated: block, managed_challenge, js_challenge,
+// challenge or log) and description (shown as the rule's "Name" in
 // Cloudflare's dashboard - the Ruleset Engine API has no separate name field). It never
 // touches any other rule in that phase - your existing manually-authored rules (Google
 // Cloud Services, Block Crawlers, etc.) are left exactly as-is.

@@ -122,6 +122,30 @@ not just in the UI, so there's no way to accidentally flip it on unconfigured.
 Nothing calls Cloudflare until you flip both on from the plugin's UI, after reviewing what
 it would have done in the recent-actions log.
 
+### Block action
+
+The single managed WAF rule (`ip.src in $<list>`) uses the action chosen in the UI's **Block action**
+dropdown; the server rejects anything else:
+
+| Action | Effect |
+|---|---|
+| `block` | Hard block (default). |
+| `managed_challenge` | Cloudflare picks the challenge — gentler on real users behind a shared/CGNAT IP. |
+| `js_challenge` | Passive JavaScript check. |
+| `challenge` | Interactive (CAPTCHA-style) challenge. |
+| `log` | Records the match only, blocks nothing. **Enterprise plans only.** |
+
+`skip` is deliberately not offered (it's an allow-list action and needs parameters this plugin doesn't
+send). Changing the action updates the existing rule in place, but only at the next real block — saving the
+setting doesn't call Cloudflare.
+
+### Plugin UI constraints (Zoraxy 3.3.x)
+
+Zoraxy embeds plugin pages in `<iframe sandbox="allow-scripts allow-same-origin">`. That means **no
+`<form>` submission** (silently swallowed — no event, no request; use a button + `fetch`), no `alert()` /
+`confirm()`, and no link navigation (`target=_top` / popups are blocked — show URLs as text). POSTs must send
+the CSRF token (injected into the page as `{{.csrfToken}}`) back in an **`X-CSRF-Token`** header.
+
 ## Status
 
 v0.1 — scaffolded and smoke-tested standalone: introspect output, config persistence, UI,

@@ -16,6 +16,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Braedach/zoraxy-cloudflare-waf/internal/blocker"
@@ -203,6 +204,14 @@ func registerUI(cfgStore *configStore, blk *blocker.Blocker) {
 		// form never sends it, so always carry the stored value forward rather than
 		// letting a save silently wipe it and orphan the rule Cloudflare already has.
 		incoming.ManagedRuleID = current.ManagedRuleID
+
+		if incoming.BlockAction == "" {
+			incoming.BlockAction = defaultConfig().BlockAction
+		}
+		if !validBlockAction(incoming.BlockAction) {
+			http.Error(w, fmt.Sprintf("invalid block_action %q: must be one of %s", incoming.BlockAction, strings.Join(validBlockActions, ", ")), http.StatusBadRequest)
+			return
+		}
 
 		// Server-side enforcement of "must be tested before it can run for real" -
 		// mirrors the UI's own gating but doesn't rely on it, since the UI can be
