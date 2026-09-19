@@ -1,0 +1,1 @@
+vendored zoraxy_plugin@49eb612, source: https://github.com/tobychui/zoraxy/tree/main/src/mod/plugins/zoraxy_plugin (AGPL-3.0, used out-of-process as IPC glue only)

@@ -1,0 +1,213 @@
+// Command zoraxy-cloudflare-waf is a Zoraxy plugin (PluginType_Utilities - it never sits
+// in the live proxy path) that watches Zoraxy's own access log and blacklist events for
+// abusive clients, and mirrors them into a Cloudflare IP List so Cloudflare's edge blocks
+// them before they ever reach this reverse proxy again.
+//
+// See README.md for setup. See internal/blocker, internal/logtail and internal/cloudflare
+// for the three pieces this wires together.
+package main
+
+import (
+	"bytes"
+	"context"
+	"embed"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/Braedach/zoraxy-cloudflare-waf/internal/blocker"
+	"github.com/Braedach/zoraxy-cloudflare-waf/internal/cloudflare"
+	"github.com/Braedach/zoraxy-cloudflare-waf/internal/ipfilter"
+	"github.com/Braedach/zoraxy-cloudflare-waf/internal/logtail"
+	plugin "github.com/Braedach/zoraxy-cloudflare-waf/mod/zoraxy_plugin"
+	"github.com/Braedach/zoraxy-cloudflare-waf/mod/zoraxy_plugin/events"
+)
+
+const (
+	PLUGIN_ID   = "com.braedach.zoraxy.cloudflarewaf"
+	UI_PATH     = "/ui"
+	EVENT_PATH  = "/events"
+	CONFIG_FILE = "cloudflarewaf.json"
+)
+
+//go:embed www/*
+var wwwFS embed.FS
+
+func main() {
+	runtimeCfg, err := plugin.ServeAndRecvSpec(&plugin.IntroSpect{
+		ID:            PLUGIN_ID,
+		Name:          "Cloudflare WAF Sync",
+		Author:        "Braedach",
+		AuthorContact: "https://github.com/Braedach",
+		Description:   "Watches Zoraxy's access log and blacklist events, and mirrors abusive client IPs into a Cloudflare IP List referenced by a custom WAF rule.",
+		URL:           "https://github.com/Braedach/zoraxy-cloudflare-waf",
+		Type:          plugin.PluginType_Utilities,
+		VersionMajor:  0,
+		VersionMinor:  1,
+		VersionPatch:  0,
+
+		UIPath: UI_PATH,
+
+		SubscriptionPath: EVENT_PATH,
+		SubscriptionsEvents: map[string]string{
+			string(events.EventBlacklistedIPBlocked): "Mirror an IP Zoraxy's own access-rule blacklist just blocked into the Cloudflare IP list immediately.",
+		},
+	})
+	if err != nil {
+		fmt.Println("This is a plugin for Zoraxy and should not be run standalone. Visit https://zoraxy.aroz.org to download Zoraxy.")
+		panic(err)
+	}
+
+	cfgStore, err := loadConfigStore(CONFIG_FILE)
+	if err != nil {
+		panic(fmt.Errorf("loading %s: %w", CONFIG_FILE, err))
+	}
+	log.Printf("zoraxy-cloudflare-waf starting against Zoraxy %s (uuid %s)", runtimeCfg.RuntimeConst.ZoraxyVersion, runtimeCfg.RuntimeConst.ZoraxyUUID)
+
+	checker := ipfilter.NewChecker()
+	go refreshCloudflareRangesForever(checker)
+
+	deps := blocker.Deps{
+		GetEnabled:     func() bool { return cfgStore.get().Enabled },
+		GetDryRun:      func() bool { return cfgStore.get().DryRun },
+		GetTTL:         func() time.Duration { return time.Duration(cfgStore.get().BlockTTLHours) * time.Hour },
+		GetIPListName:  func() string { return cfgStore.get().IPListName },
+		GetBlockAction: func() string { return cfgStore.get().BlockAction },
+		NewCFClient: func() (*cloudflare.Client, bool) {
+			c := cfgStore.get()
+			if c.CloudflareAPIToken == "" || c.CloudflareAccountID == "" || c.CloudflareZoneID == "" {
+				return nil, false
+			}
+			return cloudflare.New(c.CloudflareAccountID, c.CloudflareZoneID, c.CloudflareAPIToken), true
+		},
+	}
+	blk := blocker.New(deps, checker)
+
+	startLogTailer(cfgStore, blk)
+	registerEventSubscriber(cfgStore, blk)
+	registerUI(cfgStore, blk)
+
+	serverAddr := "127.0.0.1:" + strconv.Itoa(runtimeCfg.Port)
+	log.Printf("zoraxy-cloudflare-waf listening on %s", serverAddr)
+	if err := http.ListenAndServe(serverAddr, nil); err != nil {
+		panic(err)
+	}
+}
+
+func refreshCloudflareRangesForever(checker *ipfilter.Checker) {
+	// First refresh shortly after startup (give networking a moment to settle), then
+	// daily - Cloudflare's published ranges change rarely, this is just hygiene against
+	// staleness, not something latency-sensitive.
+	time.Sleep(10 * time.Second)
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := checker.Refresh(ctx); err != nil {
+			log.Printf("ipfilter: refresh cloudflare ranges failed, keeping previous set: %v", err)
+		}
+		cancel()
+		time.Sleep(24 * time.Hour)
+	}
+}
+
+func startLogTailer(cfgStore *configStore, blk *blocker.Blocker) {
+	cfg := cfgStore.get()
+	t := logtail.New(logtail.Config{
+		LogDir:        cfg.ZoraxyLogDir,
+		WindowSeconds: cfg.RateLimitWindowSeconds,
+		Threshold:     cfg.RateLimitThreshold,
+	}, func(c logtail.Candidate) {
+		blk.Submit(context.Background(), blocker.Candidate{IP: c.IP, Reason: c.Reason, Source: "logtail"})
+	})
+	// Changing log directory / window / threshold in the UI takes effect on next plugin
+	// restart (Zoraxy's plugin manager can restart a plugin without a full reboot) - v1
+	// keeps the tailer's own config static after start rather than hot-reloading mid-file.
+	go t.Run(nil)
+}
+
+func registerEventSubscriber(cfgStore *configStore, blk *blocker.Blocker) {
+	http.HandleFunc(EVENT_PATH+"/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !cfgStore.get().ReactToBlacklistEvent {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		defer r.Body.Close()
+		buf := new(bytes.Buffer)
+		if _, err := buf.ReadFrom(r.Body); err != nil {
+			http.Error(w, "failed to read body", http.StatusBadRequest)
+			return
+		}
+
+		var ev events.Event
+		if err := events.ParseEvent(buf.Bytes(), &ev); err != nil {
+			http.Error(w, "failed to parse event: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if data, ok := ev.Data.(*events.BlacklistedIPBlockedEvent); ok {
+			reason := fmt.Sprintf("zoraxy blacklist blocked (%s %s)", data.Method, data.RequestedURL)
+			blk.Submit(r.Context(), blocker.Candidate{IP: data.IP, Reason: reason, Source: "blacklist-event"})
+		}
+
+		w.WriteHeader(http.StatusOK)
+	})
+}
+
+func registerUI(cfgStore *configStore, blk *blocker.Blocker) {
+	uiRouter := plugin.NewPluginEmbedUIRouter(PLUGIN_ID, &wwwFS, "/www", UI_PATH)
+	uiRouter.RegisterTerminateHandler(func() {
+		log.Println("zoraxy-cloudflare-waf terminating on Zoraxy's request")
+	}, nil)
+
+	uiRouter.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, struct {
+			Config  Config           `json:"config"`
+			History []blocker.Action `json:"history"`
+		}{Config: redactedConfig(cfgStore.get()), History: blk.History()})
+	}, nil)
+
+	uiRouter.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var incoming Config
+		if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
+			http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		// A blank token in the incoming payload means "leave the stored one alone" -
+		// the redacted GET response never round-trips the real token back to the form.
+		if incoming.CloudflareAPIToken == "" {
+			incoming.CloudflareAPIToken = cfgStore.get().CloudflareAPIToken
+		}
+		if err := cfgStore.set(incoming); err != nil {
+			http.Error(w, "failed to save: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, redactedConfig(cfgStore.get()))
+	}, nil)
+
+	uiRouter.AttachHandlerToMux(nil)
+}
+
+func redactedConfig(c Config) Config {
+	if c.CloudflareAPIToken != "" {
+		c.CloudflareAPIToken = "•••• (set)"
+	}
+	return c
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("writeJSON: %v", err)
+	}
+}

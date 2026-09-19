@@ -1,0 +1,14 @@
+{
+  "enabled": false,
+  "dry_run": true,
+  "cloudflare_api_token": "",
+  "cloudflare_account_id": "",
+  "cloudflare_zone_id": "",
+  "ip_list_name": "zoraxy_cf_waf_blocklist",
+  "block_action": "block",
+  "zoraxy_log_dir": "/srv/zoraxy/log",
+  "ratelimit_window_seconds": 60,
+  "ratelimit_threshold": 30,
+  "react_to_blacklist_event": true,
+  "block_ttl_hours": 24
+}

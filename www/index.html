@@ -1,0 +1,147 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cloudflare WAF Sync</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 1.5rem; color: #1a1a1a; }
+  h1 { font-size: 1.25rem; margin-bottom: 0.25rem; }
+  .sub { color: #666; margin-bottom: 1.5rem; }
+  fieldset { border: 1px solid #ddd; border-radius: 6px; margin-bottom: 1.5rem; padding: 1rem; }
+  legend { font-weight: 600; padding: 0 0.4rem; }
+  label { display: block; margin: 0.6rem 0 0.2rem; font-size: 0.85rem; color: #333; }
+  input[type=text], input[type=password], input[type=number] {
+    width: 100%; max-width: 420px; padding: 0.4rem; box-sizing: border-box;
+    border: 1px solid #ccc; border-radius: 4px;
+  }
+  .row { display: flex; align-items: center; gap: 0.5rem; margin: 0.6rem 0; }
+  .row label { margin: 0; }
+  button { margin-top: 1rem; padding: 0.5rem 1rem; border: 0; border-radius: 4px; background: #f38020; color: white; cursor: pointer; }
+  button:hover { background: #d9701c; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #eee; }
+  .result-blocked { color: #b00; font-weight: 600; }
+  .result-dry-run { color: #a66a00; }
+  .result-skipped-disabled, .result-skipped-duplicate, .result-skipped-invalid-ip { color: #888; }
+  .result-error { color: #b00; font-weight: 600; }
+  #saveStatus { margin-left: 0.75rem; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<h1>Cloudflare WAF Sync</h1>
+<div class="sub">Mirrors abusive clients from Zoraxy's access log and blacklist events into a Cloudflare IP List.</div>
+
+<form id="cfgForm">
+  <fieldset>
+    <legend>Behaviour</legend>
+    <div class="row"><input type="checkbox" id="enabled"> <label for="enabled">Enabled (turn off to fully stop any Cloudflare API calls)</label></div>
+    <div class="row"><input type="checkbox" id="dryRun"> <label for="dryRun">Dry run (log decisions, never actually call Cloudflare)</label></div>
+    <div class="row"><input type="checkbox" id="reactToBlacklist"> <label for="reactToBlacklist">React to Zoraxy's own blacklistedIpBlocked event</label></div>
+    <label for="blockTTL">Re-block cooldown per IP (hours)</label>
+    <input type="number" id="blockTTL" min="1">
+  </fieldset>
+
+  <fieldset>
+    <legend>Detection thresholds (log tailer — restart plugin after changing)</legend>
+    <label for="logDir">Zoraxy log directory</label>
+    <input type="text" id="logDir">
+    <label for="windowSeconds">Window (seconds)</label>
+    <input type="number" id="windowSeconds" min="5">
+    <label for="threshold">4xx/5xx threshold within window</label>
+    <input type="number" id="threshold" min="1">
+  </fieldset>
+
+  <fieldset>
+    <legend>Cloudflare</legend>
+    <label for="apiToken">API token (scoped: Account.Rulesets Edit, Zone.Firewall Services Edit)</label>
+    <input type="password" id="apiToken" placeholder="leave blank to keep the currently stored token">
+    <label for="accountId">Account ID</label>
+    <input type="text" id="accountId">
+    <label for="zoneId">Zone ID</label>
+    <input type="text" id="zoneId">
+    <label for="listName">IP list name</label>
+    <input type="text" id="listName">
+    <label for="blockAction">Block action</label>
+    <input type="text" id="blockAction" placeholder="block or managed_challenge">
+  </fieldset>
+
+  <button type="submit">Save</button>
+  <span id="saveStatus"></span>
+</form>
+
+<h2>Recent actions</h2>
+<table id="historyTable">
+  <thead><tr><th>Time</th><th>IP</th><th>Result</th><th>Source</th><th>Reason</th><th>Detail</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<script>
+const csrfToken = "{{.csrfToken}}";
+
+function withCsrf(headers) {
+  headers = headers || {};
+  headers["X-Zoraxy-Csrf"] = csrfToken;
+  return headers;
+}
+
+function fillForm(cfg) {
+  document.getElementById("enabled").checked = !!cfg.enabled;
+  document.getElementById("dryRun").checked = !!cfg.dry_run;
+  document.getElementById("reactToBlacklist").checked = !!cfg.react_to_blacklist_event;
+  document.getElementById("blockTTL").value = cfg.block_ttl_hours || 24;
+  document.getElementById("logDir").value = cfg.zoraxy_log_dir || "";
+  document.getElementById("windowSeconds").value = cfg.ratelimit_window_seconds || 60;
+  document.getElementById("threshold").value = cfg.ratelimit_threshold || 30;
+  document.getElementById("apiToken").placeholder = cfg.cloudflare_api_token ? "currently set — leave blank to keep it" : "not set";
+  document.getElementById("accountId").value = cfg.cloudflare_account_id || "";
+  document.getElementById("zoneId").value = cfg.cloudflare_zone_id || "";
+  document.getElementById("listName").value = cfg.ip_list_name || "";
+  document.getElementById("blockAction").value = cfg.block_action || "block";
+}
+
+function fillHistory(history) {
+  const tbody = document.querySelector("#historyTable tbody");
+  tbody.innerHTML = "";
+  (history || []).slice().reverse().forEach(a => {
+    const tr = document.createElement("tr");
+    const cls = "result-" + (a.result || "").replace(/[^a-z-]/g, "");
+    tr.innerHTML = `<td>${new Date(a.time).toLocaleString()}</td><td>${a.ip}</td>` +
+      `<td class="${cls}">${a.result}</td><td>${a.source}</td><td>${a.reason}</td><td>${a.detail || ""}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function refresh() {
+  fetch("api/status").then(r => r.json()).then(data => {
+    fillForm(data.config);
+    fillHistory(data.history);
+  }).catch(e => console.error(e));
+}
+
+document.getElementById("cfgForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const payload = {
+    enabled: document.getElementById("enabled").checked,
+    dry_run: document.getElementById("dryRun").checked,
+    react_to_blacklist_event: document.getElementById("reactToBlacklist").checked,
+    block_ttl_hours: parseInt(document.getElementById("blockTTL").value, 10) || 24,
+    zoraxy_log_dir: document.getElementById("logDir").value,
+    ratelimit_window_seconds: parseInt(document.getElementById("windowSeconds").value, 10) || 60,
+    ratelimit_threshold: parseInt(document.getElementById("threshold").value, 10) || 30,
+    cloudflare_api_token: document.getElementById("apiToken").value,
+    cloudflare_account_id: document.getElementById("accountId").value,
+    cloudflare_zone_id: document.getElementById("zoneId").value,
+    ip_list_name: document.getElementById("listName").value,
+    block_action: document.getElementById("blockAction").value,
+  };
+  fetch("api/config", { method: "POST", headers: withCsrf({ "Content-Type": "application/json" }), body: JSON.stringify(payload) })
+    .then(r => { if (!r.ok) throw new Error("save failed: " + r.status); return r.json(); })
+    .then(cfg => { fillForm(cfg); document.getElementById("saveStatus").textContent = "Saved."; setTimeout(() => document.getElementById("saveStatus").textContent = "", 2000); })
+    .catch(e => { document.getElementById("saveStatus").textContent = e.message; });
+});
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
