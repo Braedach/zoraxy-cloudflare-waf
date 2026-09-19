@@ -66,10 +66,16 @@ On `alex` (see `Proxmox/LXC/Readme.md` in the homelab repo for the box this targ
 ```bash
 mkdir -p /srv/zoraxy/plugins/com.braedach.zoraxy.cloudflarewaf
 scp build/zoraxy-cloudflare-waf_*_linux_amd64 \
-  alex:/srv/zoraxy/plugins/com.braedach.zoraxy.cloudflarewaf/zoraxy-cloudflare-waf
+  alex:/srv/zoraxy/plugins/com.braedach.zoraxy.cloudflarewaf/com.braedach.zoraxy.cloudflarewaf
+scp icon.png \
+  alex:/srv/zoraxy/plugins/com.braedach.zoraxy.cloudflarewaf/icon.png
 scp cloudflarewaf.example.json \
   alex:/srv/zoraxy/plugins/com.braedach.zoraxy.cloudflarewaf/cloudflarewaf.json
 ```
+
+**The executable must be named exactly like its folder** (`com.braedach.zoraxy.cloudflarewaf`) —
+Zoraxy 3.3.4 rejects it with `no valid entry point found` otherwise. Zoraxy only scans the plugins
+folder at startup, so restart Zoraxy after the first install.
 
 Then, from Zoraxy's admin UI, enable the plugin — it'll show up under Plugins, with its own
 settings page (`Config → Cloudflare` fieldset) for the rest of the setup: paste the token,

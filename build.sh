@@ -13,6 +13,8 @@ GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$O
 echo "Built: $OUT"
 echo
 echo "Install on alex:"
-echo "  scp $OUT alex:/srv/zoraxy/plugins/com.braedach.zoraxy.cloudflarewaf/zoraxy-cloudflare-waf"
-echo "  # first install only: also copy cloudflarewaf.example.json there as cloudflarewaf.json"
+echo "  scp $OUT alex:/srv/zoraxy/plugins/com.braedach.zoraxy.cloudflarewaf/com.braedach.zoraxy.cloudflarewaf"
+echo "  # first install only: also copy icon.png, and cloudflarewaf.example.json there as cloudflarewaf.json"
+echo "  # (the binary MUST be named like its folder or Zoraxy says \"no valid entry point found\";"
+echo "  #  restart Zoraxy after the first install - it only scans plugins at startup)"
 echo "  # and edit it with real Cloudflare credentials before enabling in the plugin UI"
