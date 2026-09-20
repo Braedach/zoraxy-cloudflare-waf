@@ -6,6 +6,7 @@ package blocker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -55,6 +56,10 @@ type Blocker struct {
 	mu      sync.Mutex
 	seen    map[string]time.Time // ip -> last actioned time, for dedup
 	history []Action             // ring buffer, newest last
+
+	// cfMu serialises the live Cloudflare section (ensure list -> ensure rule -> add IP). Detectors call
+	// Submit concurrently; without this two first-ever blocks could both create the WAF rule.
+	cfMu sync.Mutex
 }
 
 const historyLimit = 200
@@ -136,6 +141,9 @@ func (b *Blocker) Submit(ctx context.Context, c Candidate) {
 		return
 	}
 
+	b.cfMu.Lock()
+	defer b.cfMu.Unlock()
+
 	client, ok := b.deps.NewCFClient()
 	if !ok {
 		action.Result = "error"
@@ -167,6 +175,15 @@ func (b *Blocker) Submit(ctx context.Context, c Candidate) {
 	}
 
 	if newRuleID, err := client.EnsureBlockRule(ctx, b.deps.GetIPListName(), b.deps.GetBlockAction(), b.deps.GetRuleDescription(), b.deps.GetManagedRuleID()); err != nil {
+		var conflict *cloudflare.RuleConflictError
+		if errors.As(err, &conflict) {
+			// Someone else's rule has our name. We won't touch it, and adding IPs to a list nothing
+			// references would only look like protection - report it loudly instead.
+			action.Result = "error"
+			action.Detail = err.Error()
+			b.record(action)
+			return
+		}
 		// Non-fatal: the list membership below still protects, just via whatever rule
 		// (if any) already references this list. Surface it, don't abort the add.
 		log.Printf("block %s: ensure rule (continuing anyway): %v", normalizedIP, err)

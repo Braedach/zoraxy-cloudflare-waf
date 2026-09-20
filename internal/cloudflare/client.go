@@ -12,9 +12,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"time"
 )
 
@@ -25,6 +27,31 @@ type Client struct {
 	ZoneID    string
 	Token     string
 	HTTP      *http.Client
+
+	// Base overrides the Cloudflare API base URL (tests point it at an httptest server).
+	Base string
+}
+
+func (c *Client) base() string {
+	if c.Base != "" {
+		return c.Base
+	}
+	return apiBase
+}
+
+// APIError is a failed Cloudflare API call, carrying the HTTP status so callers can tell "404, this
+// resource doesn't exist" apart from "403 / 5xx / timeout, we don't know" - that distinction decides
+// whether it is safe to create something or we must stop.
+type APIError struct {
+	Status  int
+	Message string
+}
+
+func (e *APIError) Error() string { return e.Message }
+
+func isNotFound(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && ae.Status == http.StatusNotFound
 }
 
 func New(accountID, zoneID, token string) *Client {
@@ -77,10 +104,10 @@ func (c *Client) do(ctx context.Context, method, url string, body any, out any) 
 
 	var parsed apiResponse
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return fmt.Errorf("cloudflare api: non-JSON response (status %d): %s", resp.StatusCode, string(raw))
+		return &APIError{Status: resp.StatusCode, Message: fmt.Sprintf("cloudflare api: non-JSON response (status %d): %s", resp.StatusCode, string(raw))}
 	}
 	if !parsed.Success {
-		return fmt.Errorf("cloudflare api error (status %d): %+v", resp.StatusCode, parsed.Errors)
+		return &APIError{Status: resp.StatusCode, Message: fmt.Sprintf("cloudflare api error (status %d): %+v", resp.StatusCode, parsed.Errors)}
 	}
 	if out != nil && len(parsed.Result) > 0 {
 		return json.Unmarshal(parsed.Result, out)
@@ -92,34 +119,8 @@ func (c *Client) do(ctx context.Context, method, url string, body any, out any) 
 // this client needs - TestCapabilities below tests those individually). Corresponds to
 // the "API token" test in Cloudflare's dashboard.
 func (c *Client) VerifyToken(ctx context.Context) error {
-	url := apiBase + "/user/tokens/verify"
+	url := c.base() + "/user/tokens/verify"
 	return c.do(ctx, http.MethodGet, url, nil, nil)
-}
-
-// probe is like do, but reports the raw HTTP status instead of collapsing everything into
-// one error - needed to tell "403, this token can't see this" apart from "404, this
-// resource genuinely doesn't exist yet" (a fresh zone with zero custom rules returns 404
-// for the phase entrypoint even with a fully-permissioned token).
-func (c *Client) probe(ctx context.Context, method, url string) (status int, success bool, err error) {
-	req, err := http.NewRequestWithContext(ctx, method, url, nil)
-	if err != nil {
-		return 0, false, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return 0, false, err
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return resp.StatusCode, false, err
-	}
-	var parsed apiResponse
-	_ = json.Unmarshal(raw, &parsed) // best-effort; status code is the primary signal here
-	return resp.StatusCode, parsed.Success, nil
 }
 
 // CapabilityReport is the result of TestCapabilities: what the configured token can
@@ -138,13 +139,22 @@ type CapabilityReport struct {
 	// it on first real block).
 	ListExists    bool `json:"list_exists"`
 	ListItemCount int  `json:"list_item_count,omitempty"`
+
+	// RuleCount is how many custom rules the zone already has (Free plans allow 5 in total).
+	RuleCount int `json:"rule_count"`
+
+	// RuleNameConflict is true when a rule with exactly the configured WAF rule name already exists and is
+	// not this plugin's rule. The plugin will refuse to touch it (see RuleConflictError), so the operator
+	// has to pick another name before going live.
+	RuleNameConflict bool `json:"rule_name_conflict"`
 }
 
 // TestCapabilities checks token validity and both required scopes without mutating
 // anything - the lists check is a plain GET (list access, not creation), and the WAF
 // check is a plain GET of the custom-rules phase entrypoint. If listName is non-empty and
-// already exists, also reports its current item count (see Config.MaxIPListItems).
-func (c *Client) TestCapabilities(ctx context.Context, listName string) CapabilityReport {
+// already exists, also reports its current item count (see Config.MaxIPListItems). If
+// ruleDescription is non-empty it also reports whether an existing rule would clash with it.
+func (c *Client) TestCapabilities(ctx context.Context, listName, ruleDescription, managedRuleID string) CapabilityReport {
 	var report CapabilityReport
 
 	if err := c.VerifyToken(ctx); err != nil {
@@ -153,7 +163,7 @@ func (c *Client) TestCapabilities(ctx context.Context, listName string) Capabili
 	}
 	report.TokenValid = true
 
-	listsURL := fmt.Sprintf("%s/accounts/%s/rules/lists", apiBase, c.AccountID)
+	listsURL := fmt.Sprintf("%s/accounts/%s/rules/lists", c.base(), c.AccountID)
 	var lists []ipList
 	if err := c.do(ctx, http.MethodGet, listsURL, nil, &lists); err != nil {
 		report.ListsError = err.Error()
@@ -170,15 +180,30 @@ func (c *Client) TestCapabilities(ctx context.Context, listName string) Capabili
 		}
 	}
 
-	wafURL := fmt.Sprintf("%s/zones/%s/rulesets/phases/http_request_firewall_custom/entrypoint", apiBase, c.ZoneID)
-	if status, success, err := c.probe(ctx, http.MethodGet, wafURL); err != nil {
-		report.WAFError = err.Error()
-	} else if success || status == http.StatusNotFound {
+	wafURL := fmt.Sprintf("%s/zones/%s/rulesets/phases/%s/entrypoint", c.base(), c.ZoneID, firewallCustomPhase)
+	var rs ruleset
+	err := c.do(ctx, http.MethodGet, wafURL, nil, &rs)
+	var apiErr *APIError
+	switch {
+	case err == nil:
+		report.WAFAccess = true
+		report.RuleCount = len(rs.Rules)
+		if ruleDescription != "" {
+			for _, r := range rs.Rules {
+				if r.Description == ruleDescription && r.ID != managedRuleID && !referencesList(r.Expression, listName) {
+					report.RuleNameConflict = true
+					break
+				}
+			}
+		}
+	case isNotFound(err):
 		// 404 here means "this zone has no custom rules yet", not "no access" - a
 		// correctly-scoped token gets 404 on a fresh zone just as often as 200.
 		report.WAFAccess = true
-	} else {
-		report.WAFError = fmt.Sprintf("HTTP %d - check the token has Zone > WAF > Edit for this zone", status)
+	case errors.As(err, &apiErr):
+		report.WAFError = fmt.Sprintf("HTTP %d - check the token has Zone > WAF > Edit for this zone", apiErr.Status)
+	default:
+		report.WAFError = err.Error()
 	}
 
 	return report
@@ -195,7 +220,7 @@ type ipList struct {
 // Config.MaxIPListItems).
 func (c *Client) ListIPListItemCount(ctx context.Context, listID string) (int, error) {
 	var l ipList
-	url := fmt.Sprintf("%s/accounts/%s/rules/lists/%s", apiBase, c.AccountID, listID)
+	url := fmt.Sprintf("%s/accounts/%s/rules/lists/%s", c.base(), c.AccountID, listID)
 	if err := c.do(ctx, http.MethodGet, url, nil, &l); err != nil {
 		return 0, fmt.Errorf("getting list %s: %w", listID, err)
 	}
@@ -206,7 +231,7 @@ func (c *Client) ListIPListItemCount(ctx context.Context, listID string) (int, e
 // exist yet.
 func (c *Client) EnsureIPList(ctx context.Context, listName string) (string, error) {
 	var lists []ipList
-	url := fmt.Sprintf("%s/accounts/%s/rules/lists", apiBase, c.AccountID)
+	url := fmt.Sprintf("%s/accounts/%s/rules/lists", c.base(), c.AccountID)
 	if err := c.do(ctx, http.MethodGet, url, nil, &lists); err != nil {
 		return "", fmt.Errorf("listing ip lists: %w", err)
 	}
@@ -232,11 +257,6 @@ func (c *Client) EnsureIPList(ctx context.Context, listName string) (string, err
 	return result.ID, nil
 }
 
-type listItemPatch struct {
-	Append []listItem `json:"append,omitempty"`
-	Remove []string   `json:"remove,omitempty"`
-}
-
 type listItem struct {
 	IP      string `json:"ip"`
 	Comment string `json:"comment,omitempty"`
@@ -247,30 +267,21 @@ type bulkOperation struct {
 }
 
 // AddIP appends ip to the list, with comment as the audit trail visible in the
-// Cloudflare dashboard (e.g. "zoraxy log-threshold: 42 4xx in 60s"). This is async on
-// Cloudflare's side; we fire the patch and don't block on the bulk_operations result -
-// the recent-actions log in this plugin's own UI is the source of truth for "did my
-// plugin try to block this", the Cloudflare dashboard is the source of truth for whether
-// it landed.
+// Cloudflare dashboard. It uses the documented "create list items" call (POST .../items, JSON array
+// body), which appends and, for an IP already present, just replaces that entry - so re-adding is
+// harmless. Cloudflare processes it asynchronously (the response only carries an operation_id); we
+// don't wait for it - this plugin's own recent-actions log says "we tried", the Cloudflare
+// dashboard says whether it landed.
 func (c *Client) AddIP(ctx context.Context, listID, ip, comment string) error {
-	url := fmt.Sprintf("%s/accounts/%s/rules/lists/%s/items", apiBase, c.AccountID, listID)
-	patch := listItemPatch{Append: []listItem{{IP: ip, Comment: comment}}}
+	url := fmt.Sprintf("%s/accounts/%s/rules/lists/%s/items", c.base(), c.AccountID, listID)
 	var op bulkOperation
-	if err := c.do(ctx, http.MethodPatch, url, patch, &op); err != nil {
+	if err := c.do(ctx, http.MethodPost, url, []listItem{{IP: ip, Comment: comment}}, &op); err != nil {
 		return fmt.Errorf("adding %s to list: %w", ip, err)
 	}
 	return nil
 }
 
-func (c *Client) RemoveIP(ctx context.Context, listID, ip string) error {
-	url := fmt.Sprintf("%s/accounts/%s/rules/lists/%s/items", apiBase, c.AccountID, listID)
-	patch := listItemPatch{Remove: []string{ip}}
-	var op bulkOperation
-	if err := c.do(ctx, http.MethodPatch, url, patch, &op); err != nil {
-		return fmt.Errorf("removing %s from list: %w", ip, err)
-	}
-	return nil
-}
+const firewallCustomPhase = "http_request_firewall_custom"
 
 type ruleset struct {
 	ID    string `json:"id"`
@@ -278,41 +289,64 @@ type ruleset struct {
 	Rules []rule `json:"rules"`
 }
 
+// rule is the read view of a custom rule plus the small body we write for our own rule. Other rules are
+// only ever READ (never re-sent), so fields we don't model - action_parameters, logging, etc. - on the
+// operator's own rules are never touched.
 type rule struct {
 	ID          string `json:"id,omitempty"`
 	Expression  string `json:"expression"`
 	Action      string `json:"action"`
 	Description string `json:"description"`
+	Enabled     *bool  `json:"enabled,omitempty"`
+}
+
+// RuleConflictError means a rule with the configured WAF rule name already exists in the zone but is
+// not this plugin's (its expression doesn't reference our list). We refuse to modify it.
+type RuleConflictError struct {
+	Description string
+	RuleID      string
+	ListName    string
+}
+
+func (e *RuleConflictError) Error() string {
+	return fmt.Sprintf("a rule named %q already exists in this zone (id %s) and does not reference $%s, so it is not this plugin's rule - "+
+		"not modifying it; choose a different WAF rule name", e.Description, e.RuleID, e.ListName)
+}
+
+// referencesList reports whether a rule expression uses the list `$name` (word-boundary match, so
+// $foo doesn't count as a reference to $foobar).
+func referencesList(expression, listName string) bool {
+	if listName == "" {
+		return false
+	}
+	return regexp.MustCompile(`\$` + regexp.QuoteMeta(listName) + `\b`).MatchString(expression)
 }
 
 // EnsureBlockRule makes sure exactly one custom rule exists on the zone's
 // http_request_firewall_custom phase referencing listName, with the given action
-// (any custom-rule action the caller has validated: block, managed_challenge, js_challenge,
-// challenge or log) and description (shown as the rule's "Name" in
-// Cloudflare's dashboard - the Ruleset Engine API has no separate name field). It never
-// touches any other rule in that phase - your existing manually-authored rules (Google
-// Cloud Services, Block Crawlers, etc.) are left exactly as-is.
+// (block, managed_challenge, js_challenge, challenge or log - validated by the caller) and
+// description (shown as the rule's "Name" in Cloudflare's dashboard - the Ruleset Engine API has no
+// separate name field). Returns the rule's ID so the caller can persist it.
 //
-// existingRuleID, if non-empty (Config.ManagedRuleID from a previous call), is matched
-// first so renaming `description` later updates the same rule instead of creating a
-// duplicate. If empty (first run, or the persisted ID went stale - e.g. someone deleted
-// the rule by hand), falls back to matching by description text, then creates a new rule
-// if neither matches. Returns the rule's ID so the caller can persist it.
+// Safety, in order of importance:
+//   - Other rules are never re-sent. Adding uses POST .../rulesets/{id}/rules and editing uses
+//     PATCH .../rules/{id}; the whole-list PUT is used only to create the phase's very first rule on a
+//     zone that verifiably has none, because a PUT replaces the entire list.
+//   - Any failure reading the current rules aborts. Only an explicit 404 (no entrypoint yet) counts as
+//     "no rules", and even then we confirm no ruleset exists for the phase before creating one.
+//   - Our own rule is recognised by the stored ID first. Without an ID we adopt a rule with the same
+//     description only if its expression already references our list; otherwise it is someone else's
+//     rule and we return a RuleConflictError instead of overwriting it.
 func (c *Client) EnsureBlockRule(ctx context.Context, listName, action, description, existingRuleID string) (string, error) {
-	const phase = "http_request_firewall_custom"
-
-	url := fmt.Sprintf("%s/zones/%s/rulesets/phases/%s/entrypoint", apiBase, c.ZoneID, phase)
-
-	var rs ruleset
-	err := c.do(ctx, http.MethodGet, url, nil, &rs)
-	notFound := err != nil // a zone with zero custom rules yet returns a 404 for the phase entrypoint
-
+	url := fmt.Sprintf("%s/zones/%s/rulesets/phases/%s/entrypoint", c.base(), c.ZoneID, firewallCustomPhase)
 	expression := fmt.Sprintf("(ip.src in $%s)", listName)
 
-	if notFound {
-		// No entrypoint ruleset exists yet on this zone for this phase - create one with
-		// just our rule.
-		return c.createEntrypoint(ctx, phase, expression, action, description)
+	var rs ruleset
+	if err := c.do(ctx, http.MethodGet, url, nil, &rs); err != nil {
+		if !isNotFound(err) {
+			return "", fmt.Errorf("reading the zone's custom rules (not writing anything): %w", err)
+		}
+		return c.createFirstRule(ctx, url, expression, action, description)
 	}
 
 	var match *rule
@@ -326,76 +360,86 @@ func (c *Client) EnsureBlockRule(ctx context.Context, listName, action, descript
 	}
 	if match == nil {
 		for i := range rs.Rules {
-			if rs.Rules[i].Description == description {
-				match = &rs.Rules[i]
-				break
+			if rs.Rules[i].Description != description {
+				continue
 			}
+			if !referencesList(rs.Rules[i].Expression, listName) {
+				return "", &RuleConflictError{Description: description, RuleID: rs.Rules[i].ID, ListName: listName}
+			}
+			match = &rs.Rules[i]
+			break
 		}
 	}
 
 	if match == nil {
-		return c.appendRule(ctx, phase, rs.Rules, expression, action, description)
+		return c.addRule(ctx, rs, expression, action, description)
 	}
 	if match.Expression == expression && match.Action == action && match.Description == description {
 		return match.ID, nil // already correct, nothing to do
 	}
-	return c.updateRule(ctx, phase, rs.Rules, match.ID, expression, action, description)
+	return c.patchRule(ctx, rs.ID, *match, expression, action, description)
 }
 
-// updateRule returns the (unchanged) ruleID once the PUT succeeds - the Ruleset Engine
-// API preserves rule IDs across an update-in-place PUT of the whole rule list.
-func (c *Client) updateRule(ctx context.Context, phase string, existing []rule, ruleID, expression, action, description string) (string, error) {
-	updated := make([]rule, 0, len(existing))
-	for _, r := range existing {
-		if r.ID == ruleID {
-			r.Expression = expression
-			r.Action = action
-			r.Description = description
+// createFirstRule handles a 404 on the phase entrypoint. Before writing anything it lists the zone's
+// rulesets to confirm none exists for this phase: the create is a whole-list PUT, so if the 404 were
+// wrong we would wipe someone's rules.
+func (c *Client) createFirstRule(ctx context.Context, entrypointURL, expression, action, description string) (string, error) {
+	var all []ruleset
+	listURL := fmt.Sprintf("%s/zones/%s/rulesets", c.base(), c.ZoneID)
+	if err := c.do(ctx, http.MethodGet, listURL, nil, &all); err != nil {
+		return "", fmt.Errorf("entrypoint not found but could not confirm the zone has no custom ruleset (not writing anything): %w", err)
+	}
+	for _, r := range all {
+		if r.Phase == firewallCustomPhase {
+			return "", fmt.Errorf("entrypoint reported not found but ruleset %s exists for %s - refusing to overwrite it", r.ID, firewallCustomPhase)
 		}
-		updated = append(updated, r)
 	}
-	if err := c.putEntrypoint(ctx, phase, updated); err != nil {
-		return "", err
+
+	body := struct {
+		Rules []rule `json:"rules"`
+	}{Rules: []rule{{Expression: expression, Action: action, Description: description}}}
+	var created ruleset
+	if err := c.do(ctx, http.MethodPut, entrypointURL, body, &created); err != nil {
+		return "", fmt.Errorf("creating the first custom rule: %w", err)
 	}
-	return ruleID, nil
+	return findOurRule(created, nil, expression, description)
 }
 
-func (c *Client) appendRule(ctx context.Context, phase string, existing []rule, expression, action, description string) (string, error) {
-	updated := append(existing, rule{Expression: expression, Action: action, Description: description})
-	if err := c.putEntrypoint(ctx, phase, updated); err != nil {
-		return "", err
+// addRule appends our rule with the single-rule POST; the response is the full ruleset, so the new
+// rule's ID is whichever rule wasn't there before.
+func (c *Client) addRule(ctx context.Context, before ruleset, expression, action, description string) (string, error) {
+	url := fmt.Sprintf("%s/zones/%s/rulesets/%s/rules", c.base(), c.ZoneID, before.ID)
+	body := rule{Expression: expression, Action: action, Description: description}
+	enabled := true
+	body.Enabled = &enabled
+	var after ruleset
+	if err := c.do(ctx, http.MethodPost, url, body, &after); err != nil {
+		return "", fmt.Errorf("adding rule: %w", err)
 	}
-	return c.findRuleID(ctx, phase, description)
+	known := map[string]bool{}
+	for _, r := range before.Rules {
+		known[r.ID] = true
+	}
+	return findOurRule(after, known, expression, description)
 }
 
-func (c *Client) createEntrypoint(ctx context.Context, phase, expression, action, description string) (string, error) {
-	if err := c.putEntrypoint(ctx, phase, []rule{{Expression: expression, Action: action, Description: description}}); err != nil {
-		return "", err
+// patchRule edits only our own rule. Cloudflare wants the complete new definition of that rule, so we
+// send action/expression/description and carry over its enabled flag (a rule the operator paused
+// stays paused). action_parameters belong to the old action, so they are not carried over.
+func (c *Client) patchRule(ctx context.Context, rulesetID string, existing rule, expression, action, description string) (string, error) {
+	url := fmt.Sprintf("%s/zones/%s/rulesets/%s/rules/%s", c.base(), c.ZoneID, rulesetID, existing.ID)
+	body := rule{Expression: expression, Action: action, Description: description, Enabled: existing.Enabled}
+	if err := c.do(ctx, http.MethodPatch, url, body, nil); err != nil {
+		return "", fmt.Errorf("updating rule %s: %w", existing.ID, err)
 	}
-	return c.findRuleID(ctx, phase, description)
+	return existing.ID, nil
 }
 
-// findRuleID re-fetches the entrypoint to learn the ID Cloudflare assigned to the rule we
-// just wrote - the PUT response doesn't echo per-rule IDs in a way worth depending on, so
-// a fresh GET matched by description is the reliable way to learn it.
-func (c *Client) findRuleID(ctx context.Context, phase, description string) (string, error) {
-	url := fmt.Sprintf("%s/zones/%s/rulesets/phases/%s/entrypoint", apiBase, c.ZoneID, phase)
-	var rs ruleset
-	if err := c.do(ctx, http.MethodGet, url, nil, &rs); err != nil {
-		return "", fmt.Errorf("re-fetching entrypoint to learn new rule ID: %w", err)
-	}
+func findOurRule(rs ruleset, known map[string]bool, expression, description string) (string, error) {
 	for _, r := range rs.Rules {
-		if r.Description == description {
+		if !known[r.ID] && r.Expression == expression && r.Description == description {
 			return r.ID, nil
 		}
 	}
-	return "", fmt.Errorf("rule with description %q not found after write", description)
-}
-
-func (c *Client) putEntrypoint(ctx context.Context, phase string, rules []rule) error {
-	url := fmt.Sprintf("%s/zones/%s/rulesets/phases/%s/entrypoint", apiBase, c.ZoneID, phase)
-	body := struct {
-		Rules []rule `json:"rules"`
-	}{Rules: rules}
-	return c.do(ctx, http.MethodPut, url, body, nil)
+	return "", fmt.Errorf("rule with description %q not found in Cloudflare's response after writing it", description)
 }

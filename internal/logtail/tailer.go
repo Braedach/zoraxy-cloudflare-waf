@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -30,8 +31,51 @@ var (
 	// Same probe/exploit pattern set as the forensic report script's "Exploit / Probe
 	// Attempts" section - kept in sync deliberately so a human reading both tools sees
 	// the same definition of "suspicious".
+	// reqRe anchors on the END of the line ("METHOD /path STATUS"), so text inside the origin or user-agent
+	// fields can never be mistaken for the request.
+	reqRe = regexp.MustCompile(`\b(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH) (\S+) (\d{3})\s*$`)
+
 	exploitRe = regexp.MustCompile(`(?i)(\.\./|%2e%2e|cmd=|exec=|eval\(|<script|union.*select|/etc/passwd|/bin/sh|169\.254\.169\.254|file%3a%2f%2f|file://|\.azure/credentials|\.azure/accessTokens|/actuator/env|/actuator/|\.env\.backup|\.env\.prod|dump\.sql|terraform\.tfstate)`)
 )
+
+// probePatterns flag requests for files that only a scanner asks for, judged on the request PATH alone and
+// regardless of the response status. The status-independence matters: single-page apps answer any path
+// with 200 + their index page, so a scanner sweeping them never produces the 4xx/5xx the threshold rule
+// counts (seen in practice: ~half the scanners hitting a homelab were invisible to the threshold rule).
+//
+// The set is deliberately narrow - VCS metadata, dotenv, cloud/tooling credential directories, credential
+// dotfiles, credential-named files and SSH keys - things with no legitimate reason to be requested over
+// HTTP. Deliberately NOT included: bare .php, phpinfo, wp-*, config.json, .zip/.bak/.sql: legitimate
+// sites use those, and a false positive here means an operator locked out of their own site.
+// /.well-known/ (ACME, webfinger, nodeinfo, security.txt) never matches any of these.
+var probePatterns = []struct {
+	label string
+	re    *regexp.Regexp
+}{
+	{"vcs", regexp.MustCompile(`(?i)/\.(git|svn|hg)(/|$|\?)`)},
+	{"dotenv", regexp.MustCompile(`(?i)/\.env(?:[^a-z]|$)`)},
+	{"tool-or-cloud-dir", regexp.MustCompile(`(?i)/\.(aws|docker|kube|ssh|azure|gcloud|config|anthropic|vscode|idea)(/|$|\?)`)},
+	{"credential-dotfile", regexp.MustCompile(`(?i)/\.(netrc|npmrc|pypirc|htpasswd|htaccess|bash_history|ds_store)(?:[^a-z0-9_]|$)`)},
+	{"credential-file", regexp.MustCompile(`(?i)/[^/?]*(credentials|client_secret|service[-_]?account|application_default_credentials)[^/?]*\.(json|xml|db|ya?ml)(?:\?|$)`)},
+	{"ssh-key", regexp.MustCompile(`(?i)/id_(rsa|ed25519|ecdsa)(?:[^a-z0-9]|$)`)},
+}
+
+// matchProbePath reports which probe pattern (if any) the request path matches, checking both the raw
+// and the percent-decoded form so %2e%67it style evasion doesn't slip through.
+func matchProbePath(path string) (string, bool) {
+	forms := []string{path}
+	if dec, err := url.PathUnescape(path); err == nil && dec != path {
+		forms = append(forms, dec)
+	}
+	for _, f := range forms {
+		for _, p := range probePatterns {
+			if p.re.MatchString(f) {
+				return p.label, true
+			}
+		}
+	}
+	return "", false
+}
 
 // Candidate mirrors blocker.Candidate's shape without importing it, so this package has
 // no dependency on the blocker package - main.go wires the two together.
@@ -169,6 +213,18 @@ func (t *Tailer) handleLine(line string) {
 		t.candidates.Add(1)
 		t.onEvent(Candidate{IP: ip, Reason: "exploit-pattern-match in request line"})
 		return
+	}
+
+	if req := reqRe.FindStringSubmatch(line); req != nil {
+		if label, ok := matchProbePath(req[2]); ok {
+			path := req[2]
+			if len(path) > 60 {
+				path = path[:60] + "..."
+			}
+			t.candidates.Add(1)
+			t.onEvent(Candidate{IP: ip, Reason: fmt.Sprintf("sensitive-path probe (%s): %s", label, path)})
+			return
+		}
 	}
 
 	statusMatch := statusRe.FindStringSubmatch(line)

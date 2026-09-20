@@ -47,7 +47,7 @@ func main() {
 		URL:           "https://github.com/Braedach/zoraxy-cloudflare-waf",
 		Type:          plugin.PluginType_Utilities,
 		VersionMajor:  0,
-		VersionMinor:  1,
+		VersionMinor:  2,
 		VersionPatch:  0,
 
 		UIPath: UI_PATH,
@@ -249,6 +249,8 @@ func registerUI(cfgStore *configStore, blk *blocker.Blocker) {
 			CloudflareAPIToken  string `json:"cloudflare_api_token"`
 			CloudflareAccountID string `json:"cloudflare_account_id"`
 			CloudflareZoneID    string `json:"cloudflare_zone_id"`
+			IPListName          string `json:"ip_list_name"`     // optional: what is typed in the form, else the saved value
+			RuleDescription     string `json:"rule_description"` // optional, same
 		}
 		if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
 			http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
@@ -264,9 +266,16 @@ func registerUI(cfgStore *configStore, blk *blocker.Blocker) {
 			return
 		}
 		client := cloudflare.New(incoming.CloudflareAccountID, incoming.CloudflareZoneID, token)
-		report := client.TestCapabilities(r.Context(), current.IPListName)
-		log.Printf("test connection: token_valid=%v lists_access=%v waf_access=%v list_exists=%v",
-			report.TokenValid, report.ListsAccess, report.WAFAccess, report.ListExists)
+		listName, ruleName := incoming.IPListName, incoming.RuleDescription
+		if listName == "" {
+			listName = current.IPListName
+		}
+		if ruleName == "" {
+			ruleName = current.RuleDescription
+		}
+		report := client.TestCapabilities(r.Context(), listName, ruleName, current.ManagedRuleID)
+		log.Printf("test connection: token_valid=%v lists_access=%v waf_access=%v list_exists=%v rules=%d rule_name_conflict=%v",
+			report.TokenValid, report.ListsAccess, report.WAFAccess, report.ListExists, report.RuleCount, report.RuleNameConflict)
 		writeJSON(w, report)
 	}, nil)
 

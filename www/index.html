@@ -62,9 +62,11 @@
   <h3>What it does</h3>
   <ul>
     <li>Follows Zoraxy's access log (from the moment the plugin starts) and, if ticked, Zoraxy's own blacklist events.</li>
-    <li>A client IP becomes a block candidate when a request looks like an exploit probe (path traversal, <code>/etc/passwd</code>,
-      <code>.env</code> backups, actuator endpoints, etc.), or after more than the threshold of 4xx/5xx responses within the window
-      (see <em>Detection thresholds</em>).</li>
+    <li>A client IP becomes a block candidate when (1) a request looks like an exploit probe (path traversal, <code>/etc/passwd</code>,
+      actuator endpoints, etc.); (2) it asks for a file only scanners ask for — <code>/.git/…</code>, <code>/.env</code>,
+      <code>/.aws</code>/<code>/.docker</code>/<code>/.kube</code>/<code>/.ssh</code>, <code>.netrc</code>/<code>.npmrc</code>, credential
+      files, SSH keys — <em>whatever the response status</em> (single-page apps answer such paths with 200, so error counts alone miss
+      those scanners); or (3) it racks up more than the threshold of 4xx/5xx responses within the window (see <em>Detection thresholds</em>).</li>
     <li>Private, loopback and Cloudflare's own addresses are never blocked. An IP already actioned is skipped until the
       re-block cooldown passes.</li>
   </ul>
@@ -90,8 +92,9 @@
     <li><strong>IP list name</strong> is a machine name Cloudflare uses inside the rule expression: letters, digits and underscores only,
       no spaces.</li>
     <li><strong>WAF rule name</strong> is just the label in Cloudflare's Security Rules list — spaces and capitals are fine.
-      <strong>Make it unique.</strong> If a rule with exactly this name already exists in your zone, this plugin will take it over and
-      replace its expression and action.</li>
+      <strong>Use a name none of your own rules has.</strong> The plugin only ever edits the rule it created. If one of your rules already
+      has exactly this name, it is left untouched, the plugin's rule is not created, and blocks are reported as errors (Test Connection
+      warns you up front).</li>
   </ul>
 
   <h3>Good to know</h3>
@@ -104,7 +107,7 @@
 
 <div id="setupBanner" class="banner warn" style="display:none">
   <strong>Setup required.</strong> Fill in the Cloudflare section below and click <em>Test Connection</em>.
-  The Enabled toggle stays off until a test succeeds — see
+  The Enabled toggle stays locked until credentials are saved (or a test succeeds) — see
   <code>https://github.com/Braedach/zoraxy-cloudflare-waf#setup</code> (README → Setup) for how to
   create a correctly scoped token. Zoraxy's plugin frame blocks link clicks, so copy the address.
 </div>
@@ -171,8 +174,9 @@
 
     <label for="ruleDescription">WAF rule name (shown in Cloudflare's Security Rules dashboard)</label>
     <input type="text" id="ruleDescription">
-    <div class="limits">Free text — spaces and capitals are fine, no underscores needed. <strong>Must be unique:</strong> a rule already
-      called exactly this in your zone would be overwritten by this plugin. Example: <code>Zoraxy Cloudflare WAF plugin - IP blocklist</code>.</div>
+    <div class="limits">Free text — spaces and capitals are fine, no underscores needed. <strong>Pick a name none of your rules uses:</strong>
+      the plugin never edits a rule it didn't create, so a same-named rule of yours would be left alone and this plugin's rule would not be
+      created (Test Connection warns about that). Example: <code>Zoraxy Cloudflare WAF plugin - IP blocklist</code>.</div>
     <label for="blockAction">Block action</label>
     <select id="blockAction">
       <option value="block">block — hard block</option>
@@ -351,6 +355,8 @@ document.getElementById("testBtn").addEventListener("click", () => {
     cloudflare_api_token: document.getElementById("apiToken").value,
     cloudflare_account_id: document.getElementById("accountId").value,
     cloudflare_zone_id: document.getElementById("zoneId").value,
+    ip_list_name: document.getElementById("listName").value,
+    rule_description: document.getElementById("ruleDescription").value,
   };
   const statusEl = document.getElementById("testStatus");
   const banner = document.getElementById("testResultBanner");
@@ -371,7 +377,15 @@ document.getElementById("testBtn").addEventListener("click", () => {
       lines.push(body.lists_access ? "✓ Can manage IP Lists (Account Filter Lists)" : "✗ " + (body.lists_error || "no list access"));
       lines.push(body.waf_access ? "✓ Can manage WAF custom rules (Zone WAF)" : "✗ " + (body.waf_error || "no WAF access"));
       const allOk = body.token_valid && body.lists_access && body.waf_access;
-      banner.className = "banner " + (allOk ? "ok" : "error");
+      if (body.waf_access) {
+        lines.push("ℹ Your zone has " + body.rule_count + " custom rule(s) already" +
+          (body.rule_count >= 5 ? " — Free plans allow 5 in total, so adding this plugin's rule may fail" : ""));
+      }
+      if (body.rule_name_conflict) {
+        lines.push("⚠ A rule named \"" + document.getElementById("ruleDescription").value + "\" already exists in this zone and is not this " +
+          "plugin's. The plugin will NOT modify it, so nothing would be enforced — change the WAF rule name before going live.");
+      }
+      banner.className = "banner " + (!allOk ? "error" : body.rule_name_conflict ? "warn" : "ok");
       banner.innerHTML = lines.join("<br>");
       banner.style.display = "block";
       lastTestPassed = allOk;

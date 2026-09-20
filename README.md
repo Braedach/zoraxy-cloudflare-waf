@@ -23,10 +23,21 @@ Cloudflare **IP List** and ensures exactly one persistent custom rule references
 `(ip.src in $<your_list_name>)`, ~30-40 characters regardless of how many IPs the list
 holds. That sidesteps the expression-length cap entirely and uses exactly one of your five
 rule slots no matter how many IPs get blocked. It never touches any other rule you've
-configured by hand — with one caveat: the plugin recognises *its own* rule by the Cloudflare-assigned
-rule ID once it has created it, but until that first real block (no ID stored yet) it looks for an
-existing rule with exactly the same **WAF rule name** (`rule_description`) and takes that over. So give
-the plugin's rule a name that no rule of yours already uses.
+configured by hand, and the code is written so that it can't:
+
+- **Your other rules are never re-sent.** The plugin adds its rule with Cloudflare's single-rule call
+  (`POST /zones/{zone}/rulesets/{id}/rules`) and later edits only that rule (`PATCH …/rules/{rule id}`).
+  The whole-list `PUT` — which Cloudflare documents as *replacing every rule in the phase* — is used only to
+  create the phase's very first rule on a zone that verifiably has none (it lists the zone's rulesets first to
+  confirm). Fields the plugin doesn't model on your rules (`action_parameters`, logging, disabled state…)
+  therefore can't be lost.
+- **A failed read writes nothing.** If reading the zone's current rules fails for any reason — timeout, rate
+  limit, 5xx, 403 — the plugin stops. Only an explicit 404 ("no rules yet") is treated as an empty zone.
+- **Your rules are never adopted by name.** The plugin recognises its own rule by the Cloudflare-assigned rule
+  ID once it has created it. Before that (no ID stored yet) it adopts a rule with the same **WAF rule name**
+  only if that rule already references the plugin's list; a same-named rule that doesn't is treated as yours,
+  left untouched, and blocks are reported as `error` in the action log. **Test Connection warns you about such
+  a clash in advance.**
 
 **The real ceiling is the list's 10,000-item cap**, not the rule. `Config.MaxIPListItems`
 (default 10,000) is this plugin's own pre-flight guard — checked live before every add, so
@@ -43,8 +54,24 @@ both feed a single decision funnel (`internal/blocker`):
 1. **Log tailer** (`internal/logtail`) follows Zoraxy's current-month
    `zr_YYYY-M.log`, matching the same `[client: ip]` / status-code / exploit-pattern
    fields as `Proxmox/LXC/Scripts/forensic-report-zoraxy-v2.sh` in the homelab repo. A
-   client crossing the configured 4xx/5xx threshold in the configured window, or hitting
-   an exploit-pattern match, becomes a block candidate.
+   client becomes a block candidate by any of three routes:
+   - an **exploit pattern** in the request line (path traversal, `/etc/passwd`, `/actuator/`, …);
+   - a **sensitive-path probe** — asking for something only a scanner asks for, *whatever the response
+     status*: VCS metadata (`/.git/…`, `/.svn/…`, `/.hg/…`), `/.env`, tool/cloud credential directories
+     (`/.aws/`, `/.docker/`, `/.kube/`, `/.ssh/`, `/.azure/`, `/.gcloud/`, `/.config/`, `/.anthropic/`,
+     `/.vscode/`, `/.idea/`), credential dotfiles (`.netrc`, `.npmrc`, `.pypirc`, `.htpasswd`, `.htaccess`,
+     `.bash_history`, `.DS_Store`), credential-named files (`credentials.json`, `client_secret.json`,
+     `service-account.yaml`, …) and SSH keys (`id_rsa`, `id_ed25519`, …). Matching is on the request path only,
+     case-insensitive, and also on the percent-decoded path;
+   - more than the configured number of **4xx/5xx responses** in the configured window.
+
+   *Why the path probes exist:* single-page apps answer **any** path with `200` and their index page, so a
+   scanner sweeping them never produces the errors the threshold counts. On a real 38-hour sample, the
+   threshold rule flagged 8 scanner IPs and missed 9 more that the path rules catch (17 in total); none of the
+   other ~140 public IPs in that sample was flagged by them. The set is deliberately narrow: bare `.php`, `phpinfo`, `wp-*`,
+   `config.json`, `.zip`/`.bak`/`.sql` are **not** included, because legitimate sites use them and a false
+   positive locks an operator out of their own site. `/.well-known/` (ACME, webfinger, nodeinfo) never
+   matches.
 2. **Event subscriber** listens for Zoraxy's own `blacklistedIpBlocked` event, so an IP
    your existing access-rule blacklist just blocked gets mirrored into Cloudflare
    immediately.
@@ -120,7 +147,9 @@ sidebar.
 Paste the token into the plugin's UI, then click **Test Connection** before doing anything
 else — it checks the token is valid and that both scopes actually work (a live, read-only
 check: it does not create or modify anything), and reports exactly which one is missing if
-either fails. Test Connection checks whatever is currently typed in the boxes and does **not** save it —
+either fails. It also reports how many custom rules the zone already has (Free plans allow 5 in total) and
+warns if the WAF rule name clashes with one of your existing rules. Test Connection checks whatever is
+currently typed in the boxes and does **not** save it —
 click **Save** afterwards. **The `Enabled` toggle stays locked until credentials are in place** (saved, or
 a Test Connection has just succeeded), and the server refuses to save `enabled: true` unless the token,
 account ID and zone ID are all set — so it can't be switched on unconfigured.
@@ -157,6 +186,8 @@ Two different settings, easy to mix up:
 
   You'll see the config summary at startup (never the credentials — only whether they're set),
   `logtail: following <file>`, one `action: <result> ip=… source=… reason=… detail=…` line per decision
+  (the reason is `sensitive-path probe (vcs): /.git/config`, `exploit-pattern-match in request line` or
+  `more than N 4xx/5xx responses within Ws`)
   (`blocked`, `dry-run`, `error`, `skipped-invalid-ip`, `skipped-disabled`, `skipped-list-full`; repeat
   hits for an already-actioned IP are left out of the journal but still appear in the table), and a
   `logtail: alive` heartbeat every 30 minutes with lines-read / candidates-raised counters.
@@ -187,17 +218,34 @@ the CSRF token (injected into the page as `{{.csrfToken}}`) back in an **`X-CSRF
 
 ## Status
 
-v0.1. Verified on Zoraxy 3.3.4 (linux/amd64): introspect output, plugin load, config persistence, the UI
-(save, masking, validation, action log), the status API, setup gating, journal logging, log-tail detection
-end to end (an exploit-pattern request is detected and correctly refused as a private address), and Test
-Connection against a real, correctly-scoped Cloudflare token (token valid, IP-list access, WAF access).
-**Not yet exercised: the live write path** — creating the IP list and WAF rule and adding an IP against a real
-zone. The `internal/cloudflare` client is written to the documented API shapes but has only been run in
-dry-run mode so far; treat live mode as unproven until you've watched a first block yourself.
+v0.2. **Dry-run verified on a live proxy; live mode not yet run against a real zone.**
+
+- *Verified on Zoraxy 3.3.4 and 3.3.5 (linux/amd64):* introspect output, plugin load (and reload after Zoraxy's
+  own auto-update), config persistence, the UI (save, masking, validation, action log), the status API, setup
+  gating, journal logging, and Test Connection against a real, correctly-scoped token.
+- *38-hour dry-run soak on a real homelab proxy* (~170,000 log lines, 156 public IPs): 8 IPs flagged, every one
+  a genuine scanner (a LeakIX crawler, credential-file hunters, `.git/config` sweeps), 0 false positives; no
+  errors, ~10 MB RSS, ~0 CPU. It also showed the threshold rule missing scanners that hit single-page apps,
+  which is why the path probes were added in 0.2.
+- *The Cloudflare write path* was reviewed against Cloudflare's documentation before going live, which found
+  and fixed three defects that dry-run can't reveal: a whole-list `PUT` that would have resent the operator's
+  rules stripped of unmodelled fields; a failed read being treated as "no rules" (which would have replaced them
+  all); and IPs being added with a `PATCH …/items` call Cloudflare doesn't document (items are added with
+  `POST …/items`, where re-adding an existing IP just replaces its entry). These paths are now unit-tested
+  against a fake Cloudflare API that records every request (`go test ./...`, no network needed).
+- **Still not exercised: a real block against a real Cloudflare zone** — actual list creation, rule creation
+  and item add. Treat live mode as unproven until you've watched the first block land in your dashboard, and
+  start with `managed_challenge` rather than `block` (bots fail it; a wrongly flagged person can pass it).
 
 Not yet implemented: unblocking / list pruning (a full list currently just stops accepting
 new blocks rather than evicting old ones), and folding in the `Fail2ban/` filter rules from
 the homelab repo as an additional pattern source (planned next).
+
+## Development
+
+```bash
+go vet ./... && go test ./...        # no network: the Cloudflare client is tested against a fake API server
+```
 
 ## Licensing note
 
