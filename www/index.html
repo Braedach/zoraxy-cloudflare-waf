@@ -101,6 +101,9 @@
   <ul>
     <li><em>Test Connection</em> checks what is typed in the boxes but does not save it — click <em>Save</em> afterwards.</li>
     <li>A changed <em>Block action</em> reaches Cloudflare at the next real block, not when you save.</li>
+    <li>Cloudflare limits how many <em>lists</em> an account can have (Free plans very few — a separate limit from the 5 custom
+      <em>rules</em>). If it is used up, the first block fails with "maximum number of lists"; <em>Test Connection</em> shows your lists
+      and warns. Free one, or point <em>IP list name</em> at an existing IP list that is only a block list.</li>
     <li>Changes to the log directory or detection thresholds need the plugin to be restarted.</li>
   </ul>
 </details>
@@ -381,12 +384,42 @@ document.getElementById("testBtn").addEventListener("click", () => {
         lines.push("ℹ Your zone has " + body.rule_count + " custom rule(s) already" +
           (body.rule_count >= 5 ? " — Free plans allow 5 in total, so adding this plugin's rule may fail" : ""));
       }
+      let hasWarning = false;
       if (body.rule_name_conflict) {
+        hasWarning = true;
         lines.push("⚠ A rule named \"" + document.getElementById("ruleDescription").value + "\" already exists in this zone and is not this " +
           "plugin's. The plugin will NOT modify it, so nothing would be enforced — change the WAF rule name before going live.");
       }
-      banner.className = "banner " + (!allOk ? "error" : body.rule_name_conflict ? "warn" : "ok");
-      banner.innerHTML = lines.join("<br>");
+      if (body.lists_access) {
+        const listName = document.getElementById("listName").value;
+        const plural = n => n + " item" + (n === 1 ? "" : "s");
+        const names = (body.lists || []).map(l => l.name + " (" + l.kind + ", " + plural(l.items) + ", used by " + l.referenced_by + " rule" +
+          (l.referenced_by === 1 ? "" : "s") + ")").join("; ");
+        lines.push("ℹ Your Cloudflare account has " + body.list_count + " custom list" + (body.list_count === 1 ? "" : "s") +
+          (names ? ": " + names : "") + ". Cloudflare limits how many lists an account may have (Free plans very few).");
+        if (!body.list_exists && body.list_count >= 1) {
+          hasWarning = true;
+          lines.push("⚠ \"" + listName + "\" doesn't exist yet. If your account's list quota is already used, creating it will fail " +
+            "(Cloudflare error 10019). Free a list — delete an unused one; Cloudflare refuses while any rule in ANY zone of the account " +
+            "still uses it — or set IP list name to an existing IP list that is safe to add blocked IPs to.");
+        }
+        if (body.list_exists && body.list_kind && body.list_kind !== "ip") {
+          hasWarning = true;
+          lines.push("✗ The list \"" + listName + "\" is a " + body.list_kind + " list, not an IP list — the plugin can't use it.");
+        }
+        if (body.list_exists && body.list_used_by_other_rules) {
+          hasWarning = true;
+          lines.push("⚠ The list \"" + listName + "\" is used by " + body.list_referenced_by + " rule(s), not all of them this plugin's. " +
+            "Blocked IPs added to it change what those rules match — if it is an ALLOW list, scanners would be let through. " +
+            "Only reuse a list that is purely a block list.");
+        }
+      }
+      banner.className = "banner " + (!allOk ? "error" : hasWarning ? "warn" : "ok");
+      banner.textContent = "";
+      lines.forEach((line, i) => {
+        if (i) banner.appendChild(document.createElement("br"));
+        banner.appendChild(document.createTextNode(line));
+      });
       banner.style.display = "block";
       lastTestPassed = allOk;
       updateEnabledGate(false);

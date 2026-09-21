@@ -387,3 +387,129 @@ func TestReferencesList(t *testing.T) {
 		}
 	}
 }
+
+// ---- list quota, list overview ----
+
+func failCode(status, code int, msg string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(`{"success":false,"errors":[{"code":` + itoa(code) + `,"message":"` + msg + `"}],"result":null}`))
+	}
+}
+
+func itoa(n int) string {
+	b, _ := json.Marshal(n)
+	return string(b)
+}
+
+func TestEnsureIPList_QuotaReached_GivesAFriendlyError(t *testing.T) {
+	c, f := newFake(t, map[string]http.HandlerFunc{
+		"GET /accounts/acct/rules/lists":  ok(`[{"id":"L1","name":"myip","kind":"ip","num_items":1,"num_referencing_filters":2}]`),
+		"POST /accounts/acct/rules/lists": failCode(400, 10019, "This account is at the maximum number of lists"),
+	})
+	_, err := c.EnsureIPList(context.Background(), "mylist")
+	var quota *ListQuotaError
+	if !errors.As(err, &quota) {
+		t.Fatalf("expected ListQuotaError, got %v", err)
+	}
+	msg := err.Error()
+	for _, want := range []string{`"mylist"`, "10019", "myip (ip, 1 item(s), used by 2 rule(s))", "ANY zone", "never an allow list"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message should mention %q: %s", want, msg)
+		}
+	}
+	if w := f.writes(); len(w) != 1 || w[0].Method != http.MethodPost {
+		t.Errorf("only the single refused create is expected, got %+v", w)
+	}
+}
+
+func TestEnsureIPList_OtherCreateErrorsStayGeneric(t *testing.T) {
+	c, _ := newFake(t, map[string]http.HandlerFunc{
+		"GET /accounts/acct/rules/lists":  ok(`[]`),
+		"POST /accounts/acct/rules/lists": failCode(400, 10001, "something else"),
+	})
+	_, err := c.EnsureIPList(context.Background(), "mylist")
+	var quota *ListQuotaError
+	if err == nil || errors.As(err, &quota) {
+		t.Fatalf("expected a generic error, got %v", err)
+	}
+}
+
+func TestEnsureIPList_NonIPListWithThatNameIsRefused(t *testing.T) {
+	c, f := newFake(t, map[string]http.HandlerFunc{
+		"GET /accounts/acct/rules/lists": ok(`[{"id":"H1","name":"mylist","kind":"hostname","num_items":3}]`),
+	})
+	id, err := c.EnsureIPList(context.Background(), "mylist")
+	if err == nil || id != "" || !strings.Contains(err.Error(), "not an IP list") {
+		t.Fatalf("expected a kind error, got id=%q err=%v", id, err)
+	}
+	if len(f.writes()) != 0 {
+		t.Fatal("no writes expected")
+	}
+}
+
+func TestTestCapabilities_ListOverview(t *testing.T) {
+	verify := "GET /user/tokens/verify"
+	listsRoute := "GET /accounts/acct/rules/lists"
+	ours := `{"id":"OURS","description":"Zoraxy WAF","expression":"(ip.src in $mylist)","action":"block","enabled":true}`
+	allow := `{"id":"AL","description":"Allow me","expression":"(ip.src in $myip)","action":"skip","enabled":true}`
+
+	t.Run("account lists are summarised; our list missing", func(t *testing.T) {
+		c, _ := newFake(t, map[string]http.HandlerFunc{verify: ok(`{}`),
+			listsRoute:          ok(`[{"id":"L1","name":"myip","kind":"ip","num_items":1,"num_referencing_filters":1}]`),
+			"GET " + entrypoint: ok(rulesetJSON(`[` + allow + `]`))})
+		r := c.TestCapabilities(context.Background(), "mylist", "Zoraxy WAF", "")
+		if r.ListCount != 1 || len(r.Lists) != 1 || r.Lists[0].Name != "myip" || r.Lists[0].Kind != "ip" || r.Lists[0].ReferencedBy != 1 {
+			t.Errorf("unexpected overview: %+v", r)
+		}
+		if r.ListExists || r.ListUsedByOtherRules {
+			t.Errorf("our list doesn't exist yet: %+v", r)
+		}
+	})
+	t.Run("our own list used only by our own rule is fine", func(t *testing.T) {
+		c, _ := newFake(t, map[string]http.HandlerFunc{verify: ok(`{}`),
+			listsRoute:          ok(`[{"id":"L2","name":"mylist","kind":"ip","num_items":7,"num_referencing_filters":1}]`),
+			"GET " + entrypoint: ok(rulesetJSON(`[` + ours + `]`))})
+		r := c.TestCapabilities(context.Background(), "mylist", "Zoraxy WAF", "OURS")
+		if !r.ListExists || r.ListKind != "ip" || r.ListReferencedBy != 1 || r.ListUsedByOtherRules {
+			t.Errorf("unexpected: %+v", r)
+		}
+	})
+	t.Run("pointing at someone else's allow list is flagged", func(t *testing.T) {
+		c, _ := newFake(t, map[string]http.HandlerFunc{verify: ok(`{}`),
+			listsRoute:          ok(`[{"id":"L1","name":"myip","kind":"ip","num_items":1,"num_referencing_filters":1}]`),
+			"GET " + entrypoint: ok(rulesetJSON(`[` + allow + `]`))})
+		r := c.TestCapabilities(context.Background(), "myip", "Zoraxy WAF", "")
+		if !r.ListExists || !r.ListUsedByOtherRules {
+			t.Errorf("a list used by a rule that is not ours must be flagged: %+v", r)
+		}
+	})
+	t.Run("our list also used by another zone's rule is flagged", func(t *testing.T) {
+		c, _ := newFake(t, map[string]http.HandlerFunc{verify: ok(`{}`),
+			listsRoute:          ok(`[{"id":"L2","name":"mylist","kind":"ip","num_items":7,"num_referencing_filters":2}]`),
+			"GET " + entrypoint: ok(rulesetJSON(`[` + ours + `]`))})
+		r := c.TestCapabilities(context.Background(), "mylist", "Zoraxy WAF", "OURS")
+		if !r.ListUsedByOtherRules {
+			t.Errorf("referenced by 2 but only 1 is ours: %+v", r)
+		}
+	})
+	t.Run("fresh zone (404 entrypoint) with a list that something references", func(t *testing.T) {
+		c, _ := newFake(t, map[string]http.HandlerFunc{verify: ok(`{}`),
+			listsRoute:          ok(`[{"id":"L1","name":"myip","kind":"ip","num_items":1,"num_referencing_filters":1}]`),
+			"GET " + entrypoint: fail(404)})
+		r := c.TestCapabilities(context.Background(), "myip", "Zoraxy WAF", "")
+		if !r.ListUsedByOtherRules {
+			t.Errorf("unexpected: %+v", r)
+		}
+	})
+	t.Run("wrong kind is reported", func(t *testing.T) {
+		c, _ := newFake(t, map[string]http.HandlerFunc{verify: ok(`{}`),
+			listsRoute:          ok(`[{"id":"H1","name":"mylist","kind":"hostname","num_items":3}]`),
+			"GET " + entrypoint: fail(404)})
+		r := c.TestCapabilities(context.Background(), "mylist", "Zoraxy WAF", "")
+		if r.ListKind != "hostname" {
+			t.Errorf("unexpected: %+v", r)
+		}
+	})
+}

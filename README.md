@@ -39,6 +39,15 @@ configured by hand, and the code is written so that it can't:
   left untouched, and blocks are reported as `error` in the action log. **Test Connection warns you about such
   a clash in advance.**
 
+**A separate, easily-missed limit: how many *lists* an account may have.** This is not the same as the 5 custom
+*rules* above. Cloudflare's quota for custom lists depends on your plan and is small on Free (check **Manage Account →
+Configurations → Lists**); the plugin needs one. If the account is already at its quota, the first real block fails with
+Cloudflare error 10019 ("maximum number of lists") — the plugin stops before creating a rule or touching any of yours, and
+reports it in the action log with the names of the lists you do have. To fix it, either free a list (delete an unused one —
+Cloudflare refuses while *any* rule in *any* zone of the account still uses it, so a parked domain's rule can be the culprit) or
+set **IP list name** to an existing **IP** list that is only a block list. **Never reuse an allow list**: blocked IPs added to it
+would be let through. Test Connection shows your lists and warns about all of this before you go live.
+
 **The real ceiling is the list's 10,000-item cap**, not the rule. `Config.MaxIPListItems`
 (default 10,000) is this plugin's own pre-flight guard — checked live before every add, so
 a full list fails softly (`skipped-list-full` in the action log) instead of erroring
@@ -148,8 +157,10 @@ Paste the token into the plugin's UI, then click **Test Connection** before doin
 else — it checks the token is valid and that both scopes actually work (a live, read-only
 check: it does not create or modify anything), and reports exactly which one is missing if
 either fails. It also reports how many custom rules the zone already has (Free plans allow 5 in total) and
-warns if the WAF rule name clashes with one of your existing rules. Test Connection checks whatever is
-currently typed in the boxes and does **not** save it —
+warns if the WAF rule name clashes with one of your existing rules. It also lists the custom lists your account
+already has (name, type, items, how many rules use each) and warns if creating the plugin's list would likely hit
+the list quota, if the list you named is not an IP list, or if it is used by rules that aren't the plugin's.
+Test Connection checks whatever is currently typed in the boxes and does **not** save it —
 click **Save** afterwards. **The `Enabled` toggle stays locked until credentials are in place** (saved, or
 a Test Connection has just succeeded), and the server refuses to save `enabled: true` unless the token,
 account ID and zone ID are all set — so it can't be switched on unconfigured.
@@ -233,6 +244,10 @@ v0.2. **Dry-run verified on a live proxy; live mode not yet run against a real z
   all); and IPs being added with a `PATCH …/items` call Cloudflare doesn't document (items are added with
   `POST …/items`, where re-adding an existing IP just replaces its entry). These paths are now unit-tested
   against a fake Cloudflare API that records every request (`go test ./...`, no network needed).
+- *First live attempt (2026-09-21):* the plugin reached Cloudflare, was refused with error 10019 (the account was at its
+  list quota — an unused list still referenced by a rule in another zone), and stopped without writing anything
+  else, which is the abort-safe behaviour the tests assert. The error is now explained in plain words and Test
+  Connection shows the account's lists up front.
 - **Still not exercised: a real block against a real Cloudflare zone** — actual list creation, rule creation
   and item add. Treat live mode as unproven until you've watched the first block land in your dashboard, and
   start with `managed_challenge` rather than `block` (bots fail it; a wrongly flagged person can pass it).

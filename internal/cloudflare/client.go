@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -45,9 +46,26 @@ func (c *Client) base() string {
 type APIError struct {
 	Status  int
 	Message string
+	Codes   []int // Cloudflare's own error codes from the response body, e.g. 10019
 }
 
 func (e *APIError) Error() string { return e.Message }
+
+// codeListQuota is Cloudflare's "This account is at the maximum number of lists" error.
+const codeListQuota = 10019
+
+func hasAPICode(err error, code int) bool {
+	var ae *APIError
+	if !errors.As(err, &ae) {
+		return false
+	}
+	for _, c := range ae.Codes {
+		if c == code {
+			return true
+		}
+	}
+	return false
+}
 
 func isNotFound(err error) bool {
 	var ae *APIError
@@ -107,7 +125,11 @@ func (c *Client) do(ctx context.Context, method, url string, body any, out any) 
 		return &APIError{Status: resp.StatusCode, Message: fmt.Sprintf("cloudflare api: non-JSON response (status %d): %s", resp.StatusCode, string(raw))}
 	}
 	if !parsed.Success {
-		return &APIError{Status: resp.StatusCode, Message: fmt.Sprintf("cloudflare api error (status %d): %+v", resp.StatusCode, parsed.Errors)}
+		codes := make([]int, 0, len(parsed.Errors))
+		for _, e := range parsed.Errors {
+			codes = append(codes, e.Code)
+		}
+		return &APIError{Status: resp.StatusCode, Codes: codes, Message: fmt.Sprintf("cloudflare api error (status %d): %+v", resp.StatusCode, parsed.Errors)}
 	}
 	if out != nil && len(parsed.Result) > 0 {
 		return json.Unmarshal(parsed.Result, out)
@@ -140,6 +162,14 @@ type CapabilityReport struct {
 	ListExists    bool `json:"list_exists"`
 	ListItemCount int  `json:"list_item_count,omitempty"`
 
+	// The account's custom lists (Cloudflare limits how many an account may have - a Free account has very
+	// few), and what is known about the list the plugin is configured to use.
+	ListCount            int           `json:"list_count"`
+	Lists                []ListSummary `json:"lists,omitempty"`
+	ListKind             string        `json:"list_kind,omitempty"`
+	ListReferencedBy     int           `json:"list_referenced_by"`
+	ListUsedByOtherRules bool          `json:"list_used_by_other_rules"`
+
 	// RuleCount is how many custom rules the zone already has (Free plans allow 5 in total).
 	RuleCount int `json:"rule_count"`
 
@@ -147,6 +177,22 @@ type CapabilityReport struct {
 	// not this plugin's rule. The plugin will refuse to touch it (see RuleConflictError), so the operator
 	// has to pick another name before going live.
 	RuleNameConflict bool `json:"rule_name_conflict"`
+}
+
+// ListSummary is one custom list in the account, for display in Test Connection.
+type ListSummary struct {
+	Name         string `json:"name"`
+	Kind         string `json:"kind"`
+	Items        int    `json:"items"`
+	ReferencedBy int    `json:"referenced_by"`
+}
+
+func summarise(lists []ipList) []ListSummary {
+	out := make([]ListSummary, 0, len(lists))
+	for _, l := range lists {
+		out = append(out, ListSummary{Name: l.Name, Kind: l.Kind, Items: l.NumItems, ReferencedBy: l.NumReferencingFilters})
+	}
+	return out
 }
 
 // TestCapabilities checks token validity and both required scopes without mutating
@@ -169,11 +215,15 @@ func (c *Client) TestCapabilities(ctx context.Context, listName, ruleDescription
 		report.ListsError = err.Error()
 	} else {
 		report.ListsAccess = true
+		report.ListCount = len(lists)
+		report.Lists = summarise(lists)
 		if listName != "" {
 			for _, l := range lists {
 				if l.Name == listName {
 					report.ListExists = true
 					report.ListItemCount = l.NumItems
+					report.ListKind = l.Kind
+					report.ListReferencedBy = l.NumReferencingFilters
 					break
 				}
 			}
@@ -188,18 +238,28 @@ func (c *Client) TestCapabilities(ctx context.Context, listName, ruleDescription
 	case err == nil:
 		report.WAFAccess = true
 		report.RuleCount = len(rs.Rules)
-		if ruleDescription != "" {
-			for _, r := range rs.Rules {
-				if r.Description == ruleDescription && r.ID != managedRuleID && !referencesList(r.Expression, listName) {
-					report.RuleNameConflict = true
-					break
-				}
+		ours := false // does this zone already have the plugin's own rule for this list?
+		for _, r := range rs.Rules {
+			isOurs := (managedRuleID != "" && r.ID == managedRuleID) || (ruleDescription != "" && r.Description == ruleDescription)
+			if isOurs && referencesList(r.Expression, listName) {
+				ours = true
 			}
+			if ruleDescription != "" && r.Description == ruleDescription && r.ID != managedRuleID && !referencesList(r.Expression, listName) {
+				report.RuleNameConflict = true
+			}
+		}
+		if report.ListExists {
+			expected := 0
+			if ours {
+				expected = 1
+			}
+			report.ListUsedByOtherRules = report.ListReferencedBy > expected
 		}
 	case isNotFound(err):
 		// 404 here means "this zone has no custom rules yet", not "no access" - a
 		// correctly-scoped token gets 404 on a fresh zone just as often as 200.
 		report.WAFAccess = true
+		report.ListUsedByOtherRules = report.ListExists && report.ListReferencedBy > 0
 	case errors.As(err, &apiErr):
 		report.WAFError = fmt.Sprintf("HTTP %d - check the token has Zone > WAF > Edit for this zone", apiErr.Status)
 	default:
@@ -212,7 +272,32 @@ func (c *Client) TestCapabilities(ctx context.Context, listName, ruleDescription
 type ipList struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
+	Kind     string `json:"kind"`
 	NumItems int    `json:"num_items"`
+	// NumReferencingFilters is how many rules/filters, in any zone of the account, reference this list.
+	NumReferencingFilters int `json:"num_referencing_filters"`
+}
+
+// ListQuotaError means Cloudflare refused to create the plugin's list because the account is already at
+// its maximum number of custom lists (Cloudflare error 10019).
+type ListQuotaError struct {
+	ListName string
+	Existing []ListSummary
+}
+
+func (e *ListQuotaError) Error() string {
+	var have []string
+	for _, l := range e.Existing {
+		have = append(have, fmt.Sprintf("%s (%s, %d item(s), used by %d rule(s))", l.Name, l.Kind, l.Items, l.ReferencedBy))
+	}
+	existing := "none listed"
+	if len(have) > 0 {
+		existing = strings.Join(have, "; ")
+	}
+	return fmt.Sprintf("cannot create the IP list %q: this Cloudflare account is already at its maximum number of custom lists "+
+		"(Cloudflare error %d). Existing lists: %s. Free one up - delete an unused list (Cloudflare refuses while any rule in ANY zone of the "+
+		"account still uses it) - or set IP list name to an existing IP list that is safe to add blocked IPs to (never an allow list)",
+		e.ListName, codeListQuota, existing)
 }
 
 // ListIPListItemCount returns the current number of items in the given list, so callers
@@ -237,6 +322,9 @@ func (c *Client) EnsureIPList(ctx context.Context, listName string) (string, err
 	}
 	for _, l := range lists {
 		if l.Name == listName {
+			if l.Kind != "" && l.Kind != "ip" {
+				return "", fmt.Errorf("the list %q exists but is a %q list, not an IP list - choose another IP list name", listName, l.Kind)
+			}
 			return l.ID, nil
 		}
 	}
@@ -252,6 +340,9 @@ func (c *Client) EnsureIPList(ctx context.Context, listName string) (string, err
 	}
 	var result ipList
 	if err := c.do(ctx, http.MethodPost, url, created, &result); err != nil {
+		if hasAPICode(err, codeListQuota) {
+			return "", &ListQuotaError{ListName: listName, Existing: summarise(lists)}
+		}
 		return "", fmt.Errorf("creating ip list %q: %w", listName, err)
 	}
 	return result.ID, nil
