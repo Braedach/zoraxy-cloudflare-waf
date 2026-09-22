@@ -94,18 +94,34 @@ rejected rather than blocked. **Always trust `CF-Connecting-IP`, never
 
 ## Setup
 
+Requirements: **Zoraxy 3.3.4 or newer**, linux/amd64 (the only architecture currently built — see
+[Releases](https://github.com/Braedach/zoraxy-cloudflare-waf/releases)), and a Cloudflare API token if you want the Cloudflare
+layer (scoping below). The plugin ships inert: `enabled: false`, `dry_run: true`.
+
+**Option A — download the release** (no Go needed):
+
+```bash
+curl -fLO https://github.com/Braedach/zoraxy-cloudflare-waf/releases/latest/download/cloudflarewaf_linux_amd64
+curl -fLO https://github.com/Braedach/zoraxy-cloudflare-waf/releases/latest/download/SHA256SUMS
+sha256sum -c SHA256SUMS            # must print: cloudflarewaf_linux_amd64: OK
+```
+
+`icon.png` and `cloudflarewaf.example.json` come from this repository.
+
+**Option B — build from source:**
+
 ```bash
 go build .                          # local sanity build
 ./build.sh                          # cross-compile linux/amd64 into ./build/
 ```
 
-Copy the result into Zoraxy's plugin folder (`<zoraxy dir>/plugins/`; the paths below assume `/srv/zoraxy` —
+Copy the binary (from either option) into Zoraxy's plugin folder (`<zoraxy dir>/plugins/`; the paths below assume `/srv/zoraxy` —
 adjust to your install, and use `scp` if Zoraxy runs on another machine):
 
 ```bash
 PLUGIN_DIR=/srv/zoraxy/plugins/com.braedach.zoraxy.cloudflarewaf
 mkdir -p "$PLUGIN_DIR"
-cp build/zoraxy-cloudflare-waf_*_linux_amd64 "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf"
+cp cloudflarewaf_linux_amd64 "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf"   # or build/zoraxy-cloudflare-waf_*_linux_amd64
 cp icon.png "$PLUGIN_DIR/icon.png"
 cp cloudflarewaf.example.json "$PLUGIN_DIR/cloudflarewaf.json"
 chmod 755 "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf"; chmod 600 "$PLUGIN_DIR/cloudflarewaf.json"
@@ -122,6 +138,9 @@ JSON. The page has a collapsible **How this works** section that covers the same
 The token, account ID and zone ID fields are masked (use **Show**; they re-hide after 15 seconds).
 
 To pick up a replaced binary, restart Zoraxy.
+
+Once the plugin is listed in Zoraxy's own plugin store, installing it from there does all of the above for you: Zoraxy creates the
+folder, names the binary to match, downloads the icon, and shows you the API permissions the plugin asks for before you enable it.
 
 ### Creating a correctly scoped API token
 
@@ -297,36 +316,35 @@ the CSRF token (injected into the page as `{{.csrfToken}}`) back in an **`X-CSRF
 
 ## Status
 
-**v0.3.0 — working.** The Cloudflare layer has been blocking real scanners in production since 2026-09-21.
+**v0.3.0 — working in production.** Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
+2026-09-21, the Zoraxy-blacklist layer since 2026-09-22.
 
-- *In production* (the author's setup: Zoraxy behind a Cloudflare tunnel): within 17 hours of going live the
-  plugin had blocked 9 scanner IPs (credential-file hunters, `.git/config` sweeps, a LeakIX crawler — every one a genuine
-  scanner, none a false positive) and Cloudflare's own counter showed **262 hits** on the WAF rule. In Zoraxy's access log,
-  6 of the 9 IPs never appeared again after being blocked and the other 3 disappeared within 4–19 seconds (Cloudflare
-  applying the list update). No path-rule miss: no public IP that hit a scanner path went unblocked. Plugin footprint:
-  ~10 MB RSS, ~0 CPU, no errors. The plugin also survived a Zoraxy self-update (3.3.4 → 3.3.5) and a host reboot unattended.
-- *Verified on Zoraxy 3.3.4 and 3.3.5 (linux/amd64):* introspect output, plugin load, config persistence, the UI, the status
-  API, setup gating, journal logging, and Test Connection against a real, correctly-scoped token.
-- *38-hour dry-run soak first* (~170,000 log lines, 156 public IPs): 8 IPs flagged, all genuine, 0 false positives — and it
-  showed the threshold rule missing scanners that hit single-page apps, which is why the path probes exist.
-- *The Cloudflare write path* was reviewed against Cloudflare's documentation before going live, which found and fixed
-  three defects dry-run can't reveal (a whole-list `PUT` that would have resent the operator's rules stripped of fields; a
-  failed read treated as "no rules"; and a non-existent `PATCH …/items` call — items are added with `POST …/items`). The
-  first live attempt then hit the account's **list quota** (Cloudflare error 10019) and stopped safely without writing
-  anything else; that error is now explained in plain words and Test Connection shows the account's lists.
-- All of the above is covered by unit tests against fake Cloudflare and Zoraxy servers that record every request
-  (`go test ./...`, no network needed; race detector clean).
+- *Latest soak — 12.7 hours with both layers live:* **15 blocks, every one a genuine scanner** (`.DS_Store` and `/.git/config`
+  sweeps, Laravel `/.ENV` probes, `/.claude`/`/.codex` credential hunts, and two Metabase CVE probes that arrived through
+  Zoraxy's own `blacklistedIpBlocked` event). **No false positives and no misses** — no public IP that hit a detection rule went
+  unblocked. No errors, ~11 MB RSS, ~0 CPU. The three records agreed exactly: 15 tracked bans, 15 IPs in each of the two selected
+  Zoraxy access rules, and the matching Cloudflare list items. Bans and the ban store survived two Zoraxy restarts.
+  Enforcement was observed in the wild, not just in tests: a scanner banned at 23:43:46 had its next requests answered with `403`
+  by Zoraxy eight seconds later.
+- *Earlier, Cloudflare layer only:* within 17 hours of going live it blocked 9 scanner IPs and Cloudflare's counter showed **262
+  hits** on the WAF rule; 6 of the 9 never came back and the other 3 stopped within 4–19 seconds (the list update propagating).
+  It also survived a Zoraxy self-update (3.3.4 → 3.3.5) and a host reboot unattended.
+- *Before that, a 38-hour dry run* (~170,000 log lines, 156 public IPs): 8 IPs flagged, all genuine — and it exposed the
+  threshold rule missing scanners that hit single-page apps, which is why the path probes exist.
+- *The Cloudflare write path* was reviewed against Cloudflare's documentation before going live, which found and fixed three
+  defects a dry run cannot reveal (a whole-list `PUT` that would have resent the operator's own rules stripped of fields; a failed
+  read treated as "no rules"; and a non-existent `PATCH …/items` call — items are added with `POST …/items`). The first live
+  attempt then hit the account's **list quota** (Cloudflare error 10019) and stopped safely without writing anything else; that
+  error is now explained in plain words, and Test Connection shows the account's lists up front.
+- *Tests:* the Cloudflare and Zoraxy clients are unit-tested against fake servers that record every request — including that a
+  failed read never leads to a write, that other rules are never resent, and that expiry only removes entries this plugin created
+  (`go vet ./... && go test ./...`, no network needed; race detector clean).
 
-**New in 0.3.0:** automatic expiry of blocks, and the optional Zoraxy-blacklist layer (which can also run without Cloudflare
-credentials). Both are unit-tested and running on the author's setup: the first real Zoraxy-layer block (a scanner fetching
-`/.claude/credentials.json`) was added to Cloudflare and to two Zoraxy access rules in one step, and a request claiming that IP
-was then refused by Zoraxy (`403`) on both rules while unbanned addresses were still served; the scanner did not return. The
-expiry pruner has run hourly against the real list and found nothing old enough to remove yet (default 14 days), so an actual
-expiry removal has so far only been exercised by the tests. The Cloudflare layer behaves exactly as in 0.2.x when the new
-settings are left at their defaults (expiry is the only one that acts on its own, and it only removes entries this plugin
-created).
+**Not yet exercised in production:** an actual expiry *removal*. The pruner has run hourly against a real list for days and
+correctly found nothing old enough to remove (default 14 days), so deletion is so far covered only by the tests.
 
-Not yet implemented: a manual "unblock this IP" button, and additional pattern sources (for example fail2ban filter rules).
+**Not implemented:** a manual "unblock this IP" button, architectures other than linux/amd64, and additional pattern sources
+(for example fail2ban filter rules).
 
 ## Development
 
