@@ -234,7 +234,8 @@ legitimate services, so a permanent block slowly becomes a false positive.
   left alone.
 - Safety: if listing the items fails, nothing is deleted; a delete with no item IDs is refused outright; at most 200
   items are removed per run (the rest follow on later runs), in batches of 100.
-- The action log shows one `expired` line per run and the journal says `expiry: removed N …`.
+- The action log shows one `expired` line per run; the journal says `expiry: removed N …`, or once an hour
+  `expiry: checked N Cloudflare list item(s), M added by this plugin, none older than D days` so you can see it is running.
 
 ### Zoraxy's own blacklist (optional second layer)
 
@@ -256,9 +257,12 @@ accepts any IP or range, and Zoraxy provides no automatic detection of abusers; 
    or the box's **own LAN address** if the tunnel's service URL resolves to it — none of which are in Zoraxy's default
    trusted list (Cloudflare's public edge ranges only). Until they are, the rule sees the box's own address: a country
    whitelist with "allow local and loopback" waves everything through and no blacklist entry matches a real visitor.
-   Add all of the box's own addresses to Zoraxy's trusted proxies and turn **Trust proxy headers only** on for the rule,
-   then verify from the box itself (a fake client IP in the header must get `403` on a country-restricted host, for each
-   address `cloudflared` may connect from):
+   Add all of the box's own addresses to Zoraxy's trusted proxies and turn **Trust proxy headers only** on for **every
+   rule that filters by IP or country — including the built-in Default rule**. With it off a rule *never* reads the
+   real-IP header, even from a trusted peer: on the author's setup a request claiming a blocked country got `200` on a
+   Default-rule host until the switch was turned on, and `403` afterwards. Then verify from the box itself (a fake client
+   IP in the header must get `403` on a host whose rule blocks that country, for each address `cloudflared` may connect
+   from):
 
    ```bash
    curl -sk -o /dev/null -w '%{http_code}\n' --resolve <host>:443:<this-box-LAN-IP> \
@@ -266,6 +270,8 @@ accepts any IP or range, and Zoraxy provides no automatic detection of abusers; 
    ```
 
    Cloudflare-side blocking is unaffected by any of this, which is why a misconfigured Zoraxy goes unnoticed.
+   The box's LAN address usually comes from DHCP: give it a router reservation, or the trusted entry silently goes stale
+   when the lease changes.
 3. **Permissions.** The plugin declares the few Zoraxy API calls it needs (`GET /plugin/api/access/list`,
    `POST /plugin/api/blacklist/ip/add`, `POST …/ip/remove`, `GET …/blacklist/list`); Zoraxy lists them in the plugin's
    info page and issues the plugin an API key for exactly those. **Restart Zoraxy once** after installing this version so the

@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -459,5 +461,21 @@ func TestBanStore_PersistsAndSurvivesCorruption(t *testing.T) {
 	matches, _ := filepath.Glob(path + ".corrupt-*")
 	if len(matches) != 1 {
 		t.Fatalf("the corrupt file should be kept aside, found %v", matches)
+	}
+}
+
+func TestPrune_SaysSoWhenNothingIsDue(t *testing.T) {
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	s := live()
+	h := build(t, expiryCF(item("new", "203.0.113.2", "zoraxy/logtail: x", iso(1)), item("manual", "203.0.113.3", "by hand", iso(300))),
+		map[string]http.HandlerFunc{}, s)
+	h.b.PruneExpired(context.Background(), now)
+	if !strings.Contains(buf.String(), "checked 2 Cloudflare list item(s), 1 added by this plugin, none older than 14 days") {
+		t.Fatalf("expected a visible 'nothing due' line, got %q", buf.String())
+	}
+	if h.cf.count("DELETE", "/accounts/a/rules/lists/L1/items") != 0 {
+		t.Fatal("nothing due means nothing deleted")
 	}
 }

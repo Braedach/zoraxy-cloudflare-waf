@@ -223,7 +223,8 @@
       Bans go into the blacklist of the access rules you tick below and expire with the setting above. Two things must be true for a ban to
       work: the rule's <strong>blacklist must be switched on</strong>, and Zoraxy must see the visitor's <strong>real</strong> address —
       behind a Cloudflare tunnel that means the address the tunnel connects from (this server's own addresses, e.g. <code>127.0.0.1</code>
-      and its LAN IP) must be in Zoraxy's <em>Trusted Proxies</em>, with the rule's <em>Trust proxy headers only</em> on. See the README
+      and its LAN IP) must be in Zoraxy's <em>Trusted Proxies</em>, with <em>Trust proxy headers only</em> switched on for the rule —
+      <strong>including the Default rule</strong> (with it off, a rule never reads the visitor's real address). See the README
       ("Zoraxy's own blacklist"). Uses the API permissions Zoraxy lists for this plugin — restart Zoraxy once after installing this version.
     </div>
     <div id="zoraxyStatus" class="limits" style="margin:0.5rem 0"></div>
@@ -339,7 +340,7 @@ function renderZoraxyRules(want) {
   };
   lastZoraxyRules.forEach(r => {
     seen.add(r.id);
-    let info = "blacklist " + (r.blacklist_enabled ? "ON" : "OFF") + " · trust proxy headers " + (r.trust_proxy_headers_only ? "ON" : "OFF (needed behind a proxy/tunnel)");
+    let info = "blacklist " + (r.blacklist_enabled ? "ON" : "OFF") + " · trust proxy headers " + (r.trust_proxy_headers_only ? "ON" : "OFF (must be ON behind a proxy/tunnel, even for the Default rule)");
     if (!r.blacklist_enabled) info += " — bans have no effect until this rule's blacklist is switched on";
     addRow(r.id, r.name || r.id, info, !r.blacklist_enabled);
   });

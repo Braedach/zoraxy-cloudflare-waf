@@ -400,10 +400,12 @@ func (b *Blocker) pruneCloudflare(ctx context.Context, cutoff time.Time, days in
 
 	type due struct{ id, ip string }
 	var dueItems []due
+	owned := 0
 	for _, it := range items {
 		if !strings.HasPrefix(it.Comment, ownedPrefix) {
 			continue // not ours - never touch entries an operator added
 		}
+		owned++
 		ts, err := time.Parse(time.RFC3339, firstNonEmpty(it.ModifiedOn, it.CreatedOn))
 		if err != nil {
 			continue // can't tell how old it is - leave it
@@ -413,6 +415,8 @@ func (b *Blocker) pruneCloudflare(ctx context.Context, cutoff time.Time, days in
 		}
 	}
 	if len(dueItems) == 0 {
+		// Say so: a silent pruner can't be told apart from one that never ran.
+		log.Printf("expiry: checked %d Cloudflare list item(s), %d added by this plugin, none older than %d days", len(items), owned, days)
 		return nil
 	}
 	if len(dueItems) > maxPrunePerRun {
@@ -450,6 +454,9 @@ func (b *Blocker) pruneZoraxy(ctx context.Context, cutoff time.Time, days int) [
 	}
 	ips, recs := b.deps.Bans.Older(cutoff)
 	if len(ips) == 0 {
+		if n := b.deps.Bans.Len(); n > 0 {
+			log.Printf("expiry: tracking %d Zoraxy ban(s), none older than %d days", n, days)
+		}
 		return nil
 	}
 	zc, ok := b.deps.NewZoraxyClient()
