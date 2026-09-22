@@ -317,10 +317,14 @@ the CSRF token (injected into the page as `{{.csrfToken}}`) back in an **`X-CSRF
 - All of the above is covered by unit tests against fake Cloudflare and Zoraxy servers that record every request
   (`go test ./...`, no network needed; race detector clean).
 
-**New in 0.3.0 — unit-tested, production soak pending:** automatic expiry of blocks, and the optional Zoraxy-blacklist layer
-(including running without Cloudflare credentials). Treat these as new until they have run for a while on your setup; the
-Cloudflare layer behaves exactly as in 0.2.x when they are left at their defaults (expiry 14 days is the only default that
-acts on its own, and it only removes entries this plugin created).
+**New in 0.3.0:** automatic expiry of blocks, and the optional Zoraxy-blacklist layer (which can also run without Cloudflare
+credentials). Both are unit-tested and running on the author's setup: the first real Zoraxy-layer block (a scanner fetching
+`/.claude/credentials.json`) was added to Cloudflare and to two Zoraxy access rules in one step, and a request claiming that IP
+was then refused by Zoraxy (`403`) on both rules while unbanned addresses were still served; the scanner did not return. The
+expiry pruner has run hourly against the real list and found nothing old enough to remove yet (default 14 days), so an actual
+expiry removal has so far only been exercised by the tests. The Cloudflare layer behaves exactly as in 0.2.x when the new
+settings are left at their defaults (expiry is the only one that acts on its own, and it only removes entries this plugin
+created).
 
 Not yet implemented: a manual "unblock this IP" button, and additional pattern sources (for example fail2ban filter rules).
 
