@@ -58,9 +58,8 @@ type Config struct {
 	// itself enforces, it only makes our own behavior fail predictably.
 	MaxIPListItems int `json:"max_ip_list_items"`
 
-	// ZoraxyLogDir is where Zoraxy writes zr_YYYY-M.log files (see
-	// Proxmox/LXC/Scripts/forensic-report-zoraxy-v2.sh in the homelab repo for the
-	// format this plugin's log tailer parses).
+	// ZoraxyLogDir is where Zoraxy writes its zr_YYYY-M.log access logs - the files this
+	// plugin's log tailer parses.
 	ZoraxyLogDir string `json:"zoraxy_log_dir"`
 
 	// RateLimitWindowSeconds / RateLimitThreshold: a client IP that racks up more than

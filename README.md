@@ -62,8 +62,8 @@ path, so it's never in the live proxy request path. It has two independent detec
 both feed a single decision funnel (`internal/blocker`):
 
 1. **Log tailer** (`internal/logtail`) follows Zoraxy's current-month
-   `zr_YYYY-M.log`, matching the same `[client: ip]` / status-code / exploit-pattern
-   fields as `Proxmox/LXC/Scripts/forensic-report-zoraxy-v2.sh` in the homelab repo. A
+   `zr_YYYY-M.log`, reading the `[client: ip]`, request-path and status-code fields Zoraxy
+   writes on every line. A
    client becomes a block candidate by any of three routes:
    - an **exploit pattern** in the request line (path traversal, `/etc/passwd`, `/actuator/`, …);
    - a **sensitive-path probe** — asking for something only a scanner asks for, *whatever the response
@@ -90,38 +90,38 @@ Every candidate is validated (`internal/ipfilter`) against Cloudflare's own publ
 ranges before it's ever sent to Cloudflare — a candidate IP that's private/loopback, or
 that's itself a Cloudflare edge IP (meaning something upstream read the wrong header), is
 rejected rather than blocked. **Always trust `CF-Connecting-IP`, never
-`X-Forwarded-For`**, on tunnel-relayed traffic — see `setup-lxc-proxy.sh` in the homelab
-repo for why.
+`X-Forwarded-For`**, on tunnel-relayed traffic — the latter is attacker-controlled.
 
 ## Setup
 
 ```bash
 go build .                          # local sanity build
-./build.sh                          # cross-compile linux/amd64 for the alex LXC
+./build.sh                          # cross-compile linux/amd64 into ./build/
 ```
 
-On `alex` (see `Proxmox/LXC/Readme.md` in the homelab repo for the box this targets):
+Copy the result into Zoraxy's plugin folder (`<zoraxy dir>/plugins/`; the paths below assume `/srv/zoraxy` —
+adjust to your install, and use `scp` if Zoraxy runs on another machine):
 
 ```bash
-mkdir -p /srv/zoraxy/plugins/com.braedach.zoraxy.cloudflarewaf
-scp build/zoraxy-cloudflare-waf_*_linux_amd64 \
-  alex:/srv/zoraxy/plugins/com.braedach.zoraxy.cloudflarewaf/com.braedach.zoraxy.cloudflarewaf
-scp icon.png \
-  alex:/srv/zoraxy/plugins/com.braedach.zoraxy.cloudflarewaf/icon.png
-scp cloudflarewaf.example.json \
-  alex:/srv/zoraxy/plugins/com.braedach.zoraxy.cloudflarewaf/cloudflarewaf.json
+PLUGIN_DIR=/srv/zoraxy/plugins/com.braedach.zoraxy.cloudflarewaf
+mkdir -p "$PLUGIN_DIR"
+cp build/zoraxy-cloudflare-waf_*_linux_amd64 "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf"
+cp icon.png "$PLUGIN_DIR/icon.png"
+cp cloudflarewaf.example.json "$PLUGIN_DIR/cloudflarewaf.json"
+chmod 755 "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf"; chmod 600 "$PLUGIN_DIR/cloudflarewaf.json"
 ```
 
-**The executable must be named exactly like its folder** (`com.braedach.zoraxy.cloudflarewaf`) —
-Zoraxy 3.3.4 rejects it with `no valid entry point found` otherwise. Zoraxy only scans the plugins
-folder at startup, so restart Zoraxy after the first install.
+**The executable must be named exactly like its folder** — Zoraxy 3.3.4 rejects it with `no valid entry
+point found` otherwise. The folder name itself is free (Zoraxy's plugin-store installer names both after the
+plugin's display name, "Zoraxy Cloudflare WAF plugin"). Zoraxy reads the plugins folder at startup, so if a
+newly copied plugin doesn't appear, restart Zoraxy.
 
 Then, from Zoraxy's admin UI, enable the plugin and open its page (under the Plugins section). Do the
 rest of the setup there — paste the token, account ID and zone ID directly, rather than hand-editing the
 JSON. The page has a collapsible **How this works** section that covers the same ground as this README.
 The token, account ID and zone ID fields are masked (use **Show**; they re-hide after 15 seconds).
 
-To pick up a replaced binary, restart Zoraxy — it only loads plugin binaries at startup.
+To pick up a replaced binary, restart Zoraxy.
 
 ### Creating a correctly scoped API token
 
@@ -137,12 +137,12 @@ To pick up a replaced binary, restart Zoraxy — it only loads plugin binaries a
 Further down the same form:
 
 - **Account Resources** → `Include` → your specific account by name, not "All accounts".
-- **Zone Resources** → `Include` → the specific zone `alex` proxies for, not "All zones".
+- **Zone Resources** → `Include` → the specific zone(s) this proxy serves, not "All zones".
 - **Client IP Address Filtering** (optional) → leave blank for the first deploy. This
-  restricts which source IP the API calls may come from - since the plugin runs *on*
-  `alex`, that means `alex`'s WAN egress IP, **not** whatever machine you're creating the
-  token from (don't click "Use my IP" unless you're on the same connection `alex`
-  egresses through). A locked-down IP filter is good extra hardening once you know that
+  restricts which source IP the API calls may come from - since the plugin runs *on* the
+  Zoraxy host, that means that host's public egress IP, **not** whatever machine you're
+  creating the token from (don't click "Use my IP" unless you're on the same connection the
+  Zoraxy host egresses through). A locked-down IP filter is good extra hardening once you know that
   IP is stable, but a home ISP rotating it would fail every API call until you noticed
   and updated the token — not something to add before the plugin's proven itself.
 
@@ -299,7 +299,7 @@ the CSRF token (injected into the page as `{{.csrfToken}}`) back in an **`X-CSRF
 
 **v0.3.0 — working.** The Cloudflare layer has been blocking real scanners in production since 2026-09-21.
 
-- *In production* (author's homelab: Zoraxy behind a Cloudflare tunnel): within 17 hours of going live the
+- *In production* (the author's setup: Zoraxy behind a Cloudflare tunnel): within 17 hours of going live the
   plugin had blocked 9 scanner IPs (credential-file hunters, `.git/config` sweeps, a LeakIX crawler — every one a genuine
   scanner, none a false positive) and Cloudflare's own counter showed **262 hits** on the WAF rule. In Zoraxy's access log,
   6 of the 9 IPs never appeared again after being blocked and the other 3 disappeared within 4–19 seconds (Cloudflare
@@ -322,8 +322,7 @@ the CSRF token (injected into the page as `{{.csrfToken}}`) back in an **`X-CSRF
 Cloudflare layer behaves exactly as in 0.2.x when they are left at their defaults (expiry 14 days is the only default that
 acts on its own, and it only removes entries this plugin created).
 
-Not yet implemented: a manual "unblock this IP" button, and folding in the `Fail2ban/` filter rules from the homelab repo
-as an additional pattern source.
+Not yet implemented: a manual "unblock this IP" button, and additional pattern sources (for example fail2ban filter rules).
 
 ## Development
 

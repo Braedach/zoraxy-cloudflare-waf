@@ -4,8 +4,8 @@
 //
 // Design note: we block via a single IP List + a single custom rule
 // ("ip.src in $<list>") rather than one custom rule per IP. Custom rules are capped
-// (5 on the plans this homelab is on, per the Security Rules screenshot reviewed when
-// this plugin was scoped) - a list can hold thousands of entries behind that one rule.
+// (5 on Cloudflare's Free plan - see the README) - a list can hold thousands of entries
+// behind that one rule.
 package cloudflare
 
 import (

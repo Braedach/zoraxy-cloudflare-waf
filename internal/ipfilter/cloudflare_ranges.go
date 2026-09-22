@@ -8,9 +8,8 @@
 //     the wrong header (X-Forwarded-For instead of CF-Connecting-IP) and blocking it would
 //     firewall off Cloudflare's own edge, not an attacker.
 //
-// See Proxmox/LXC/Scripts/setup-lxc-proxy.sh in the homelab repo: "the real client IP is
-// the CF-Connecting-IP HTTP header" - X-Forwarded-For is attacker-controlled on tunnel
-// traffic and must never be trusted for blocking decisions.
+// The real client IP is the CF-Connecting-IP HTTP header - X-Forwarded-For is
+// attacker-controlled on tunnel traffic and must never be trusted for blocking decisions.
 package ipfilter
 
 import (

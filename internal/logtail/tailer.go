@@ -4,9 +4,8 @@
 // serving traffic.
 //
 // Log format and field names (zr_YYYY-M.log, [client: ip], [origin: ...], [useragent:
-// ...], [router:ratelimit], [router:whitelist], trailing "METHOD /path STATUS") are taken
-// from Proxmox/LXC/Scripts/forensic-report-zoraxy-v2.sh in the homelab repo, which
-// reverse-engineered them from real Zoraxy output before this plugin existed.
+// ...], [router:ratelimit], [router:whitelist], trailing "METHOD /path STATUS") are
+// Zoraxy's own access-log format, taken from real Zoraxy output.
 package logtail
 
 import (
@@ -41,7 +40,7 @@ var (
 // probePatterns flag requests for files that only a scanner asks for, judged on the request PATH alone and
 // regardless of the response status. The status-independence matters: single-page apps answer any path
 // with 200 + their index page, so a scanner sweeping them never produces the 4xx/5xx the threshold rule
-// counts (seen in practice: ~half the scanners hitting a homelab were invisible to the threshold rule).
+// counts (seen in practice: about half the scanners hitting a real deployment were invisible to the threshold rule).
 //
 // The set is deliberately narrow - VCS metadata, dotenv, cloud/tooling credential directories, credential
 // dotfiles, credential-named files and SSH keys - things with no legitimate reason to be requested over
