@@ -94,16 +94,20 @@ rejected rather than blocked. **Always trust `CF-Connecting-IP`, never
 
 ## Setup
 
-Requirements: **Zoraxy 3.3.4 or newer**, linux/amd64 (the only architecture currently built — see
-[Releases](https://github.com/Braedach/zoraxy-cloudflare-waf/releases)), and a Cloudflare API token if you want the Cloudflare
-layer (scoping below). The plugin ships inert: `enabled: false`, `dry_run: true`.
+Requirements: **Zoraxy 3.3.4 or newer**, Linux, and a Cloudflare API token if you want the Cloudflare layer (scoping below).
+The plugin ships inert: `enabled: false`, `dry_run: true`.
 
-**Option A — download the release** (no Go needed):
+[Releases](https://github.com/Braedach/zoraxy-cloudflare-waf/releases) carry `amd64`, `arm64`, `arm` (ARMv7) and `386` builds,
+all static and from the same commit. **`amd64` and `386` are the tested ones; `arm64` and ARMv7 are cross-compiled and have not
+been run on real hardware by the author** — they should work, but please report anything that doesn't.
+
+**Option A — download the release** (no Go needed; substitute your architecture):
 
 ```bash
-curl -fLO https://github.com/Braedach/zoraxy-cloudflare-waf/releases/latest/download/cloudflarewaf_linux_amd64
+ARCH=amd64        # amd64 | arm64 | arm | 386
+curl -fLO https://github.com/Braedach/zoraxy-cloudflare-waf/releases/latest/download/cloudflarewaf_linux_$ARCH
 curl -fLO https://github.com/Braedach/zoraxy-cloudflare-waf/releases/latest/download/SHA256SUMS
-sha256sum -c SHA256SUMS            # must print: cloudflarewaf_linux_amd64: OK
+sha256sum --ignore-missing -c SHA256SUMS      # must print: cloudflarewaf_linux_<arch>: OK
 ```
 
 `icon.png` and `cloudflarewaf.example.json` come from this repository.
@@ -113,6 +117,7 @@ sha256sum -c SHA256SUMS            # must print: cloudflarewaf_linux_amd64: OK
 ```bash
 go build .                          # local sanity build
 ./build.sh                          # cross-compile linux/amd64 into ./build/
+./build.sh release                  # every published architecture + SHA256SUMS, into ./build/release/
 ```
 
 Copy the binary (from either option) into Zoraxy's plugin folder (`<zoraxy dir>/plugins/`; the paths below assume `/srv/zoraxy` —
@@ -121,7 +126,7 @@ adjust to your install, and use `scp` if Zoraxy runs on another machine):
 ```bash
 PLUGIN_DIR=/srv/zoraxy/plugins/com.braedach.zoraxy.cloudflarewaf
 mkdir -p "$PLUGIN_DIR"
-cp cloudflarewaf_linux_amd64 "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf"   # or build/zoraxy-cloudflare-waf_*_linux_amd64
+cp cloudflarewaf_linux_$ARCH "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf"   # or build/zoraxy-cloudflare-waf_*_linux_*
 cp icon.png "$PLUGIN_DIR/icon.png"
 cp cloudflarewaf.example.json "$PLUGIN_DIR/cloudflarewaf.json"
 chmod 755 "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf"; chmod 600 "$PLUGIN_DIR/cloudflarewaf.json"
@@ -313,6 +318,31 @@ Zoraxy embeds plugin pages in `<iframe sandbox="allow-scripts allow-same-origin"
 `<form>` submission** (silently swallowed — no event, no request; use a button + `fetch`), no `alert()` /
 `confirm()`, and no link navigation (`target=_top` / popups are blocked — show URLs as text). POSTs must send
 the CSRF token (injected into the page as `{{.csrfToken}}`) back in an **`X-CSRF-Token`** header.
+
+## Troubleshooting
+
+**The Recent actions table is empty.** It is kept in memory, so restarting Zoraxy (or the plugin) clears it. Nothing is lost: the
+blocks themselves, the Cloudflare list, the Zoraxy bans and the plugin's own ban record all survive a restart. The durable log is
+the journal — `journalctl -u zoraxy | grep -F "Zoraxy Cloudflare WAF plugin"` — which also carries an hourly heartbeat and an
+hourly expiry line, so you can tell "running, nothing to do" from "not running".
+
+**Nothing appears in Cloudflare.** Expected until the first real block: the IP list and the WAF rule are created lazily. Until then
+Test Connection is the way to check the credentials. Also make sure **Dry run** is off — in dry run the plugin only logs what it
+would do.
+
+**A block failed with "maximum number of lists".** Cloudflare limits how many custom *lists* an account may have, separately from
+the 5 custom rules; see [Cloudflare limits](#cloudflare-limits-and-how-this-plugin-manages-them).
+
+**Zoraxy bans don't block anything.** Two things must be true, and both are easy to miss behind a tunnel or proxy: the access
+rule's **blacklist must be switched on**, and Zoraxy must see the visitor's real address (trusted proxies + *Trust proxy headers
+only*, **including for the Default rule**). See [Zoraxy's own blacklist](#zoraxys-own-blacklist-optional-second-layer).
+
+**The plugin doesn't appear in Zoraxy.** The executable must be named exactly like its folder, and Zoraxy reads the plugins folder
+at startup — restart it after copying a plugin in by hand.
+
+**A legitimate visitor was blocked.** Remove the IP from the Cloudflare list (and from the access rule's blacklist if the Zoraxy
+layer is on). There is no unblock button in the plugin yet. Detection is deliberately narrow — see
+[How it works](#how-it-works) for exactly what triggers a block.
 
 ## Status
 

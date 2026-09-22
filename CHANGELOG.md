@@ -2,6 +2,12 @@
 
 Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's plugin list).
 
+## Unreleased
+- `build.sh release` builds every published architecture (amd64, arm64, ARMv7, 386) into `build/release/` with `SHA256SUMS`,
+  named as the plugin store expects; `./build.sh <arch>…` builds a specific list.
+- README: install from the release with checksum verification, requirements, and a Troubleshooting section (chief among them: the
+  Recent actions table is in memory and a Zoraxy restart empties it).
+
 ## 0.3.0 — 2026-09-22
 - **Automatic expiry** of blocks (default 14 days, `0` = never). Hourly pruner, live only; removes only Cloudflare list items
   whose comment starts `zoraxy/` and bans the plugin recorded itself; never acts on a failed read; capped at 200 per run.
