@@ -23,6 +23,7 @@ import (
 	"github.com/Braedach/zoraxy-cloudflare-waf/internal/cloudflare"
 	"github.com/Braedach/zoraxy-cloudflare-waf/internal/ipfilter"
 	"github.com/Braedach/zoraxy-cloudflare-waf/internal/logtail"
+	"github.com/Braedach/zoraxy-cloudflare-waf/internal/zoraxy"
 	plugin "github.com/Braedach/zoraxy-cloudflare-waf/mod/zoraxy_plugin"
 	"github.com/Braedach/zoraxy-cloudflare-waf/mod/zoraxy_plugin/events"
 )
@@ -32,6 +33,7 @@ const (
 	UI_PATH     = "/ui"
 	EVENT_PATH  = "/events"
 	CONFIG_FILE = "cloudflarewaf.json"
+	BANS_FILE   = "zoraxy_bans.json" // what the plugin banned in Zoraxy, and when (for expiry)
 )
 
 //go:embed www/*
@@ -47,14 +49,28 @@ func main() {
 		URL:           "https://github.com/Braedach/zoraxy-cloudflare-waf",
 		Type:          plugin.PluginType_Utilities,
 		VersionMajor:  0,
-		VersionMinor:  2,
-		VersionPatch:  1,
+		VersionMinor:  3,
+		VersionPatch:  0,
 
 		UIPath: UI_PATH,
 
 		SubscriptionPath: EVENT_PATH,
 		SubscriptionsEvents: map[string]string{
 			string(events.EventBlacklistedIPBlocked): "Mirror an IP Zoraxy's own access-rule blacklist just blocked into the Cloudflare IP list immediately.",
+		},
+
+		// Zoraxy shows these to the operator and only issues the plugin an API key for exactly these calls.
+		// They are used ONLY when "Also ban in Zoraxy" is enabled (bans + their expiry), plus the read-only rule
+		// listing that fills the access-rule picker in the plugin's page.
+		PermittedAPIEndpoints: []plugin.PermittedAPIEndpoint{
+			{Method: http.MethodGet, Endpoint: zoraxy.PathAccessList,
+				Reason: "List Zoraxy's access rules so you can choose which ones blocked IPs are banned in, and warn if a rule's blacklist is off."},
+			{Method: http.MethodPost, Endpoint: zoraxy.PathBlacklistAdd,
+				Reason: "Ban an abusive IP in the blacklist of the access rule(s) you selected (only when 'Also ban in Zoraxy' is enabled)."},
+			{Method: http.MethodPost, Endpoint: zoraxy.PathBlacklistRemove,
+				Reason: "Remove a ban this plugin added once it expires. Only IPs this plugin banned are ever removed."},
+			{Method: http.MethodGet, Endpoint: zoraxy.PathBlacklistList,
+				Reason: "Read an access rule's IP blacklist."},
 		},
 	})
 	if err != nil {
@@ -71,6 +87,18 @@ func main() {
 
 	checker := ipfilter.NewChecker()
 	go refreshCloudflareRangesForever(checker)
+
+	// Zoraxy API access (only present when Zoraxy issued the plugin a key for the permitted endpoints).
+	newZoraxyClient := func() (*zoraxy.Client, bool) {
+		if runtimeCfg.APIKey == "" || runtimeCfg.ZoraxyPort == 0 {
+			return nil, false
+		}
+		return zoraxy.New(runtimeCfg.ZoraxyPort, runtimeCfg.APIKey), true
+	}
+	bans := blocker.LoadBanStore(BANS_FILE)
+	if n := bans.Len(); n > 0 {
+		log.Printf("bans: tracking %d IP(s) banned in Zoraxy for expiry", n)
+	}
 
 	deps := blocker.Deps{
 		GetEnabled:         func() bool { return cfgStore.get().Enabled },
@@ -95,17 +123,35 @@ func main() {
 			}
 			return cloudflare.New(c.CloudflareAccountID, c.CloudflareZoneID, c.CloudflareAPIToken), true
 		},
+		GetExpiryDays:       func() int { return cfgStore.get().BlockExpiryDays },
+		GetZoraxyBanEnabled: func() bool { return cfgStore.get().ZoraxyBanEnabled },
+		GetZoraxyRules:      func() []string { return cfgStore.get().ZoraxyAccessRules },
+		NewZoraxyClient:     newZoraxyClient,
+		Bans:                bans,
 	}
 	blk := blocker.New(deps, checker)
+	go pruneExpiredForever(blk)
 
 	startLogTailer(cfgStore, blk)
 	registerEventSubscriber(cfgStore, blk)
-	registerUI(cfgStore, blk)
+	registerUI(cfgStore, blk, newZoraxyClient)
 
 	serverAddr := "127.0.0.1:" + strconv.Itoa(runtimeCfg.Port)
 	log.Printf("zoraxy-cloudflare-waf listening on %s", serverAddr)
 	if err := http.ListenAndServe(serverAddr, nil); err != nil {
 		panic(err)
+	}
+}
+
+// pruneExpiredForever removes blocks older than the configured expiry, hourly. The first pass waits a couple of
+// minutes so startup (and the config summary) is never buried under it.
+func pruneExpiredForever(blk *blocker.Blocker) {
+	time.Sleep(2 * time.Minute)
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		blk.PruneExpired(ctx, time.Now())
+		cancel()
+		time.Sleep(time.Hour)
 	}
 }
 
@@ -172,7 +218,7 @@ func registerEventSubscriber(cfgStore *configStore, blk *blocker.Blocker) {
 	})
 }
 
-func registerUI(cfgStore *configStore, blk *blocker.Blocker) {
+func registerUI(cfgStore *configStore, blk *blocker.Blocker, newZoraxyClient func() (*zoraxy.Client, bool)) {
 	uiRouter := plugin.NewPluginEmbedUIRouter(PLUGIN_ID, &wwwFS, "/www", UI_PATH)
 	uiRouter.RegisterTerminateHandler(func() {
 		log.Println("zoraxy-cloudflare-waf terminating on Zoraxy's request")
@@ -213,6 +259,20 @@ func registerUI(cfgStore *configStore, blk *blocker.Blocker) {
 			http.Error(w, fmt.Sprintf("invalid ip_list_name %q: Cloudflare list names may only contain letters, digits and underscores (max 50 characters, no spaces) - e.g. %s. Put a friendly display name in the WAF rule name field instead.", incoming.IPListName, defaultConfig().IPListName), http.StatusBadRequest)
 			return
 		}
+		if incoming.BlockExpiryDays < 0 || incoming.BlockExpiryDays > 3650 {
+			http.Error(w, "invalid block_expiry_days: use 0 (never) or 1-3650", http.StatusBadRequest)
+			return
+		}
+		rules, err := normaliseAccessRules(incoming.ZoraxyAccessRules)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		incoming.ZoraxyAccessRules = rules
+		if incoming.ZoraxyBanEnabled && len(rules) == 0 {
+			http.Error(w, "\"Also ban in Zoraxy\" needs at least one Zoraxy access rule selected", http.StatusBadRequest)
+			return
+		}
 		if incoming.BlockAction == "" {
 			incoming.BlockAction = defaultConfig().BlockAction
 		}
@@ -224,8 +284,8 @@ func registerUI(cfgStore *configStore, blk *blocker.Blocker) {
 		// Server-side enforcement of "must be tested before it can run for real" -
 		// mirrors the UI's own gating but doesn't rely on it, since the UI can be
 		// bypassed by anyone hitting this endpoint directly.
-		if incoming.Enabled && !incoming.Configured() {
-			http.Error(w, "cannot enable: cloudflare_api_token, cloudflare_account_id and cloudflare_zone_id must all be set first", http.StatusBadRequest)
+		if incoming.Enabled && !incoming.Configured() && !incoming.ZoraxyBanEnabled {
+			http.Error(w, "cannot enable: cloudflare_api_token, cloudflare_account_id and cloudflare_zone_id must all be set first (or enable \"Also ban in Zoraxy\" to run without Cloudflare)", http.StatusBadRequest)
 			return
 		}
 
@@ -235,6 +295,43 @@ func registerUI(cfgStore *configStore, blk *blocker.Blocker) {
 		}
 		logConfigSummary("config saved", incoming)
 		writeJSON(w, redactedConfig(cfgStore.get()))
+	}, nil)
+
+	// Read-only: lists Zoraxy's access rules (and whether the plugin can reach Zoraxy's API at all) for the picker.
+	uiRouter.HandleFunc("/api/zoraxy/rules", func(w http.ResponseWriter, r *http.Request) {
+		type ruleView struct {
+			ID                    string `json:"id"`
+			Name                  string `json:"name"`
+			BlacklistEnabled      bool   `json:"blacklist_enabled"`
+			WhitelistEnabled      bool   `json:"whitelist_enabled"`
+			AllowLocalAndLoopback bool   `json:"allow_local_and_loopback"`
+			TrustProxyHeadersOnly bool   `json:"trust_proxy_headers_only"`
+		}
+		resp := struct {
+			Available bool       `json:"available"`
+			Error     string     `json:"error,omitempty"`
+			Rules     []ruleView `json:"rules"`
+		}{Rules: []ruleView{}}
+		zc, ok := newZoraxyClient()
+		if !ok {
+			resp.Error = "The plugin has no Zoraxy API key yet. Zoraxy issues one when it starts the plugin with the API permissions " +
+				"granted - restart Zoraxy once after installing this version."
+			writeJSON(w, resp)
+			return
+		}
+		rules, err := zc.ListAccessRules(r.Context())
+		if err != nil {
+			resp.Error = err.Error()
+			writeJSON(w, resp)
+			return
+		}
+		resp.Available = true
+		for _, ar := range rules {
+			resp.Rules = append(resp.Rules, ruleView{ID: ar.ID, Name: ar.Name, BlacklistEnabled: ar.BlacklistEnabled,
+				WhitelistEnabled: ar.WhitelistEnabled, AllowLocalAndLoopback: ar.WhitelistAllowLocalAndLoopback,
+				TrustProxyHeadersOnly: ar.TrustProxyHeadersOnly})
+		}
+		writeJSON(w, resp)
 	}, nil)
 
 	uiRouter.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
@@ -285,8 +382,9 @@ func registerUI(cfgStore *configStore, blk *blocker.Blocker) {
 // logConfigSummary writes the settings that decide whether the plugin acts, never the credentials
 // themselves (only whether they are present).
 func logConfigSummary(prefix string, c Config) {
-	log.Printf("%s: enabled=%v dry_run=%v block_action=%s ip_list=%s react_to_blacklist=%v log_dir=%s credentials_set=%v",
-		prefix, c.Enabled, c.DryRun, c.BlockAction, c.IPListName, c.ReactToBlacklistEvent, c.ZoraxyLogDir, c.Configured())
+	log.Printf("%s: enabled=%v dry_run=%v block_action=%s ip_list=%s react_to_blacklist=%v log_dir=%s credentials_set=%v expiry_days=%d zoraxy_ban=%v zoraxy_rules=%v",
+		prefix, c.Enabled, c.DryRun, c.BlockAction, c.IPListName, c.ReactToBlacklistEvent, c.ZoraxyLogDir, c.Configured(),
+		c.BlockExpiryDays, c.ZoraxyBanEnabled, c.ZoraxyAccessRules)
 }
 
 func redactedConfig(c Config) Config {

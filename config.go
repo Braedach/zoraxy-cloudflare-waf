@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -75,9 +76,23 @@ type Config struct {
 	ReactToBlacklistEvent bool `json:"react_to_blacklist_event"`
 
 	// BlockTTLHours: how long this plugin remembers it already actioned an IP before
-	// it's willing to action it again (dedup, not an unblock - Cloudflare list removal
-	// is a separate, manual/future feature).
+	// it's willing to action it again (dedup only - it does not remove anything).
 	BlockTTLHours int `json:"block_ttl_hours"`
+
+	// BlockExpiryDays: blocks this plugin created are removed automatically once they are older than this
+	// many days (0 = never expire). Many scanners use rented/ephemeral cloud addresses that are later reused
+	// by legitimate services, so a permanent block slowly turns into a false positive. Only entries the plugin
+	// itself added are ever removed - never anything an operator put in the list or in Zoraxy by hand.
+	BlockExpiryDays int `json:"block_expiry_days"`
+
+	// ZoraxyBanEnabled additionally bans each blocked IP in Zoraxy's own access-rule blacklist, on top of
+	// Cloudflare. It needs the plugin's Zoraxy API permissions (declared in the introspection) and only has an
+	// effect for rules whose blacklist is switched on AND that see the real client IP - behind a tunnel that
+	// means the tunnel's address must be a trusted proxy in Zoraxy (see the README).
+	ZoraxyBanEnabled bool `json:"zoraxy_ban_enabled"`
+
+	// ZoraxyAccessRules lists the Zoraxy access-rule IDs bans are added to ("default" is Zoraxy's default rule).
+	ZoraxyAccessRules []string `json:"zoraxy_access_rules"`
 }
 
 // validBlockActions are the Cloudflare custom-rule actions this plugin will put on its managed rule.
@@ -101,6 +116,30 @@ var ipListNameRe = regexp.MustCompile(`^[A-Za-z0-9_]{1,50}$`)
 
 func validIPListName(n string) bool { return ipListNameRe.MatchString(n) }
 
+// accessRuleIDRe matches the IDs Zoraxy uses for access rules ("default" or a UUID).
+var accessRuleIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
+
+// normaliseAccessRules trims, de-duplicates and validates access-rule IDs.
+func normaliseAccessRules(in []string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, id := range in {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		if !accessRuleIDRe.MatchString(id) {
+			return nil, fmt.Errorf("invalid Zoraxy access rule id %q", id)
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	if len(out) > 20 {
+		return nil, fmt.Errorf("too many Zoraxy access rules selected (%d, max 20)", len(out))
+	}
+	return out, nil
+}
+
 func defaultConfig() Config {
 	return Config{
 		Enabled:                false,
@@ -114,6 +153,9 @@ func defaultConfig() Config {
 		RateLimitThreshold:     30,
 		ReactToBlacklistEvent:  true,
 		BlockTTLHours:          24,
+		BlockExpiryDays:        14,
+		ZoraxyBanEnabled:       false,
+		ZoraxyAccessRules:      []string{"default"},
 	}
 }
 

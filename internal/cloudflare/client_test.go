@@ -513,3 +513,100 @@ func TestTestCapabilities_ListOverview(t *testing.T) {
 		}
 	})
 }
+
+// ---- expiry support: listing and deleting items ----
+
+func TestListItems_FollowsCursorsAndParsesTimestamps(t *testing.T) {
+	page := 0
+	c, f := newFake(t, map[string]http.HandlerFunc{
+		"GET /accounts/acct/rules/lists/L1/items": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Query().Get("cursor") {
+			case "":
+				page++
+				_, _ = w.Write([]byte(`{"success":true,"result":[{"id":"i1","ip":"203.0.113.1","comment":"zoraxy/logtail: x","created_on":"2026-09-01T00:00:00Z","modified_on":"2026-09-02T00:00:00Z"}],"result_info":{"cursors":{"after":"c2"}}}`))
+			case "c2":
+				page++
+				_, _ = w.Write([]byte(`{"success":true,"result":[{"id":"i2","ip":"203.0.113.2","comment":"","created_on":"2026-09-03T00:00:00Z","modified_on":"2026-09-03T00:00:00Z"}],"result_info":{"cursors":{"after":""}}}`))
+			default:
+				t.Errorf("unexpected cursor %q", r.URL.Query().Get("cursor"))
+			}
+		},
+	})
+	items, err := c.ListItems(context.Background(), "L1")
+	if err != nil || len(items) != 2 || page != 2 {
+		t.Fatalf("items=%+v err=%v pages=%d", items, err, page)
+	}
+	if items[0].ID != "i1" || items[0].ModifiedOn != "2026-09-02T00:00:00Z" || items[1].IP != "203.0.113.2" {
+		t.Errorf("unexpected items: %+v", items)
+	}
+	if len(f.writes()) != 0 {
+		t.Error("listing must not write")
+	}
+}
+
+func TestListItems_ErrorMeansNoResult(t *testing.T) {
+	c, _ := newFake(t, map[string]http.HandlerFunc{"GET /accounts/acct/rules/lists/L1/items": fail(500)})
+	items, err := c.ListItems(context.Background(), "L1")
+	if err == nil || items != nil {
+		t.Fatalf("a failed list must yield no items and an error, got %v %v", items, err)
+	}
+}
+
+func TestListItems_RunawayPaginationIsRefusedNotTruncated(t *testing.T) {
+	n := 0
+	c, _ := newFake(t, map[string]http.HandlerFunc{
+		"GET /accounts/acct/rules/lists/L1/items": func(w http.ResponseWriter, r *http.Request) {
+			n++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"success":true,"result":[{"id":"x","ip":"203.0.113.1"}],"result_info":{"cursors":{"after":"c` + itoa(n) + `"}}}`))
+		},
+	})
+	if items, err := c.ListItems(context.Background(), "L1"); err == nil || items != nil {
+		t.Fatalf("a list that never ends must be an error, not a partial result: %v %v", len(items), err)
+	}
+}
+
+func TestDeleteItems_SendsIDsAndRefusesEmpty(t *testing.T) {
+	c, f := newFake(t, map[string]http.HandlerFunc{"DELETE /accounts/acct/rules/lists/L1/items": ok(`{"operation_id":"op"}`)})
+	if err := c.DeleteItems(context.Background(), "L1", nil); err == nil {
+		t.Fatal("an empty delete must be refused")
+	}
+	if err := c.DeleteItems(context.Background(), "L1", []string{"a", ""}); err == nil {
+		t.Fatal("an empty item id must be refused")
+	}
+	if len(f.writes()) != 0 {
+		t.Fatalf("refused deletes must not reach Cloudflare: %+v", f.writes())
+	}
+	if err := c.DeleteItems(context.Background(), "L1", []string{"a", "b"}); err != nil {
+		t.Fatal(err)
+	}
+	w := f.writes()
+	if len(w) != 1 || w[0].Method != http.MethodDelete {
+		t.Fatalf("writes: %+v", w)
+	}
+	var body struct {
+		Items []map[string]string `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(w[0].Body), &body); err != nil || len(body.Items) != 2 || body.Items[0]["id"] != "a" || body.Items[1]["id"] != "b" {
+		t.Errorf("body: %s (%v)", w[0].Body, err)
+	}
+}
+
+func TestFindIPList_NeverCreates(t *testing.T) {
+	c, f := newFake(t, map[string]http.HandlerFunc{
+		"GET /accounts/acct/rules/lists": ok(`[{"id":"L1","name":"mylist","kind":"ip"},{"id":"H","name":"hosts","kind":"hostname"}]`),
+	})
+	if id, found, err := c.FindIPList(context.Background(), "mylist"); err != nil || !found || id != "L1" {
+		t.Fatalf("id=%q found=%v err=%v", id, found, err)
+	}
+	if _, found, err := c.FindIPList(context.Background(), "absent"); err != nil || found {
+		t.Fatalf("found=%v err=%v", found, err)
+	}
+	if _, _, err := c.FindIPList(context.Background(), "hosts"); err == nil {
+		t.Fatal("a hostname list must be refused")
+	}
+	if len(f.writes()) != 0 {
+		t.Fatal("FindIPList must never write")
+	}
+}

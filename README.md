@@ -3,7 +3,8 @@
 A [Zoraxy](https://zoraxy.aroz.org) reverse proxy plugin that watches Zoraxy's own access
 log and blacklist events for abusive clients, and mirrors them into a Cloudflare **IP
 List** referenced by a single custom WAF rule — so Cloudflare's edge blocks them before
-they ever reach the proxy again.
+they ever reach the proxy again. Optionally it also bans them in Zoraxy's own blacklist as a second layer, and
+blocks expire automatically.
 
 ## Cloudflare limits, and how this plugin manages them
 
@@ -199,7 +200,7 @@ Two different settings, easy to mix up:
   `logtail: following <file>`, one `action: <result> ip=… source=… reason=… detail=…` line per decision
   (the reason is `sensitive-path probe (vcs): /.git/config`, `exploit-pattern-match in request line` or
   `more than N 4xx/5xx responses within Ws`)
-  (`blocked`, `dry-run`, `error`, `skipped-invalid-ip`, `skipped-disabled`, `skipped-list-full`; repeat
+  (`blocked`, `partial`, `dry-run`, `expired`, `error`, `skipped-invalid-ip`, `skipped-disabled`, `skipped-list-full`; repeat
   hits for an already-actioned IP are left out of the journal but still appear in the table), and a
   `logtail: alive` heartbeat every 30 minutes with lines-read / candidates-raised counters.
 
@@ -220,6 +221,67 @@ dropdown; the server rejects anything else:
 send). Changing the action updates the existing rule in place, but only at the next real block — saving the
 setting doesn't call Cloudflare.
 
+### Automatic expiry
+
+Blocks this plugin created are removed automatically once they are older than **Remove blocks automatically after
+(days)** — default **14**, `0` keeps them forever. Many scanners use rented cloud addresses that are later reused by
+legitimate services, so a permanent block slowly becomes a false positive.
+
+- Runs hourly (first pass two minutes after start) and **only while live** — never in dry run or while disabled.
+- Only entries the plugin added are ever removed: Cloudflare list items whose comment starts `zoraxy/`, and bans it
+  recorded in `zoraxy_bans.json` (below). Anything you added by hand, in either place, is never touched.
+- An item's age is Cloudflare's own `modified_on` time (re-adding an IP refreshes it). An item whose age can't be read is
+  left alone.
+- Safety: if listing the items fails, nothing is deleted; a delete with no item IDs is refused outright; at most 200
+  items are removed per run (the rest follow on later runs), in batches of 100.
+- The action log shows one `expired` line per run and the journal says `expiry: removed N …`.
+
+### Zoraxy's own blacklist (optional second layer)
+
+Tick **Also ban blocked IPs in Zoraxy's own access-rule blacklist** and every blocked IP is also added to the blacklist of
+the Zoraxy access rule(s) you choose (default: the `default` rule), **in addition to** Cloudflare. The layers are
+independent: if one fails and the other works the action shows as `partial` with the failing layer's reason in the Detail
+column, and with the box ticked the plugin can even run **without Cloudflare credentials** (Zoraxy layer only).
+
+Zoraxy's Quick Ban tab is only a shortcut list (today's busiest client IPs) — it can't be edited. The blacklist behind it
+accepts any IP or range, and Zoraxy provides no automatic detection of abusers; detecting them is what this plugin adds.
+
+**What has to be true for a ban to actually block anything** (the page warns about the first; the rest is on you):
+
+1. **The rule's blacklist must be switched on** in Zoraxy (per access rule). A ban added to a rule whose blacklist is off is
+   accepted and silently does nothing — the picker and the action log say so.
+2. **Zoraxy must see the visitor's real address.** An access rule judges the TCP peer's address unless *Trust proxy headers
+   only* is on **and** the peer is in Zoraxy's trusted-proxy list, in which case it reads `CF-Connecting-IP` /
+   `X-Real-IP` / `X-Forwarded-For`. Behind a Cloudflare tunnel the peer is the box running `cloudflared` — `127.0.0.1`/`::1`,
+   or the box's **own LAN address** if the tunnel's service URL resolves to it — none of which are in Zoraxy's default
+   trusted list (Cloudflare's public edge ranges only). Until they are, the rule sees the box's own address: a country
+   whitelist with "allow local and loopback" waves everything through and no blacklist entry matches a real visitor.
+   Add all of the box's own addresses to Zoraxy's trusted proxies and turn **Trust proxy headers only** on for the rule,
+   then verify from the box itself (a fake client IP in the header must get `403` on a country-restricted host, for each
+   address `cloudflared` may connect from):
+
+   ```bash
+   curl -sk -o /dev/null -w '%{http_code}\n' --resolve <host>:443:<this-box-LAN-IP> \
+        -H 'CF-Connecting-IP: 8.8.8.8' https://<host>/
+   ```
+
+   Cloudflare-side blocking is unaffected by any of this, which is why a misconfigured Zoraxy goes unnoticed.
+3. **Permissions.** The plugin declares the few Zoraxy API calls it needs (`GET /plugin/api/access/list`,
+   `POST /plugin/api/blacklist/ip/add`, `POST …/ip/remove`, `GET …/blacklist/list`); Zoraxy lists them in the plugin's
+   info page and issues the plugin an API key for exactly those. **Restart Zoraxy once** after installing this version so the
+   key is issued. Zoraxy grants permission per endpoint, not per rule, so the key could ban into any rule; the plugin only
+   ever touches the rules you tick, and only calls these endpoints when the box is ticked (plus a read-only rule listing for
+   the picker).
+
+Zoraxy's list call returns bare IPs with no dates, so the plugin keeps its own record of what it banned and when —
+`zoraxy_bans.json` next to its binary (mode 0600; a corrupt file is moved aside, never overwritten). That record is what
+expiry uses, and it means bans an operator added by hand are never removed. Bans are single IPs (no ranges), and adding an IP
+that is already banned is harmless.
+
+Upstream note: Zoraxy has an open report that IP whitelist/blacklist checks can be bypassed by spoofing proxy headers
+([tobychui/zoraxy#978](https://github.com/tobychui/zoraxy/issues/978)); Zoraxy-side bans are only as strong as your trusted-proxy
+setup, whereas Cloudflare's edge decision uses the real connection. Keep Cloudflare as the primary layer.
+
 ### Plugin UI constraints (Zoraxy 3.3.x)
 
 Zoraxy embeds plugin pages in `<iframe sandbox="allow-scripts allow-same-origin">`. That means **no
@@ -229,32 +291,33 @@ the CSRF token (injected into the page as `{{.csrfToken}}`) back in an **`X-CSRF
 
 ## Status
 
-v0.2. **Dry-run verified on a live proxy; live mode not yet run against a real zone.**
+**v0.3.0 — working.** The Cloudflare layer has been blocking real scanners in production since 2026-09-21.
 
-- *Verified on Zoraxy 3.3.4 and 3.3.5 (linux/amd64):* introspect output, plugin load (and reload after Zoraxy's
-  own auto-update), config persistence, the UI (save, masking, validation, action log), the status API, setup
-  gating, journal logging, and Test Connection against a real, correctly-scoped token.
-- *38-hour dry-run soak on a real homelab proxy* (~170,000 log lines, 156 public IPs): 8 IPs flagged, every one
-  a genuine scanner (a LeakIX crawler, credential-file hunters, `.git/config` sweeps), 0 false positives; no
-  errors, ~10 MB RSS, ~0 CPU. It also showed the threshold rule missing scanners that hit single-page apps,
-  which is why the path probes were added in 0.2.
-- *The Cloudflare write path* was reviewed against Cloudflare's documentation before going live, which found
-  and fixed three defects that dry-run can't reveal: a whole-list `PUT` that would have resent the operator's
-  rules stripped of unmodelled fields; a failed read being treated as "no rules" (which would have replaced them
-  all); and IPs being added with a `PATCH …/items` call Cloudflare doesn't document (items are added with
-  `POST …/items`, where re-adding an existing IP just replaces its entry). These paths are now unit-tested
-  against a fake Cloudflare API that records every request (`go test ./...`, no network needed).
-- *First live attempt (2026-09-21):* the plugin reached Cloudflare, was refused with error 10019 (the account was at its
-  list quota — an unused list still referenced by a rule in another zone), and stopped without writing anything
-  else, which is the abort-safe behaviour the tests assert. The error is now explained in plain words and Test
-  Connection shows the account's lists up front.
-- **Still not exercised: a real block against a real Cloudflare zone** — actual list creation, rule creation
-  and item add. Treat live mode as unproven until you've watched the first block land in your dashboard, and
-  start with `managed_challenge` rather than `block` (bots fail it; a wrongly flagged person can pass it).
+- *In production* (author's homelab: Zoraxy behind a Cloudflare tunnel): within 17 hours of going live the
+  plugin had blocked 9 scanner IPs (credential-file hunters, `.git/config` sweeps, a LeakIX crawler — every one a genuine
+  scanner, none a false positive) and Cloudflare's own counter showed **262 hits** on the WAF rule. In Zoraxy's access log,
+  6 of the 9 IPs never appeared again after being blocked and the other 3 disappeared within 4–19 seconds (Cloudflare
+  applying the list update). No path-rule miss: no public IP that hit a scanner path went unblocked. Plugin footprint:
+  ~10 MB RSS, ~0 CPU, no errors. The plugin also survived a Zoraxy self-update (3.3.4 → 3.3.5) and a host reboot unattended.
+- *Verified on Zoraxy 3.3.4 and 3.3.5 (linux/amd64):* introspect output, plugin load, config persistence, the UI, the status
+  API, setup gating, journal logging, and Test Connection against a real, correctly-scoped token.
+- *38-hour dry-run soak first* (~170,000 log lines, 156 public IPs): 8 IPs flagged, all genuine, 0 false positives — and it
+  showed the threshold rule missing scanners that hit single-page apps, which is why the path probes exist.
+- *The Cloudflare write path* was reviewed against Cloudflare's documentation before going live, which found and fixed
+  three defects dry-run can't reveal (a whole-list `PUT` that would have resent the operator's rules stripped of fields; a
+  failed read treated as "no rules"; and a non-existent `PATCH …/items` call — items are added with `POST …/items`). The
+  first live attempt then hit the account's **list quota** (Cloudflare error 10019) and stopped safely without writing
+  anything else; that error is now explained in plain words and Test Connection shows the account's lists.
+- All of the above is covered by unit tests against fake Cloudflare and Zoraxy servers that record every request
+  (`go test ./...`, no network needed; race detector clean).
 
-Not yet implemented: unblocking / list pruning (a full list currently just stops accepting
-new blocks rather than evicting old ones), and folding in the `Fail2ban/` filter rules from
-the homelab repo as an additional pattern source (planned next).
+**New in 0.3.0 — unit-tested, production soak pending:** automatic expiry of blocks, and the optional Zoraxy-blacklist layer
+(including running without Cloudflare credentials). Treat these as new until they have run for a while on your setup; the
+Cloudflare layer behaves exactly as in 0.2.x when they are left at their defaults (expiry 14 days is the only default that
+acts on its own, and it only removes entries this plugin created).
+
+Not yet implemented: a manual "unblock this IP" button, and folding in the `Fail2ban/` filter rules from the homelab repo
+as an additional pattern source.
 
 ## Development
 

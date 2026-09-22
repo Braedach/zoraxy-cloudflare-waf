@@ -30,6 +30,12 @@
   .result-skipped-disabled, .result-skipped-duplicate, .result-skipped-invalid-ip { color: #888; }
   .result-skipped-list-full { color: #b00; font-weight: 600; }
   .result-error { color: #b00; font-weight: 600; }
+  .result-partial { color: #a66a00; font-weight: 600; }
+  .result-expired { color: #888; }
+  .zrule { display: flex; gap: 0.5rem; align-items: flex-start; margin: 0.45rem 0; }
+  .zrule label { margin: 0; }
+  .zrule small { display: block; color: #555; }
+  .zrule small.zwarn { color: #7a4a00; font-weight: 600; }
   #saveStatus { margin-left: 0.75rem; font-size: 0.85rem; }
   .banner { border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1.5rem; font-size: 0.9rem; }
   .banner.warn { background: #fff4e5; border: 1px solid #f3c98b; color: #7a4a00; }
@@ -69,6 +75,9 @@
       those scanners); or (3) it racks up more than the threshold of 4xx/5xx responses within the window (see <em>Detection thresholds</em>).</li>
     <li>Private, loopback and Cloudflare's own addresses are never blocked. An IP already actioned is skipped until the
       re-block cooldown passes.</li>
+    <li><strong>Two layers, independent:</strong> Cloudflare's edge (primary) and, optionally, Zoraxy's own blacklist. If one layer fails
+      and the other works the action shows as <em>partial</em>, and the failing layer's reason is in the Detail column.</li>
+    <li><strong>Blocks expire</strong> after the number of days you set (default 14); only entries this plugin created are removed.</li>
   </ul>
 
   <h3>Off, dry run, live</h3>
@@ -126,6 +135,11 @@
     <div class="row"><input type="checkbox" id="reactToBlacklist"> <label for="reactToBlacklist">React to Zoraxy's own blacklistedIpBlocked event</label></div>
     <label for="blockTTL">Re-block cooldown per IP (hours)</label>
     <input type="number" id="blockTTL" min="1">
+    <label for="blockExpiryDays">Remove blocks automatically after (days — 0 keeps them forever)</label>
+    <input type="number" id="blockExpiryDays" min="0" max="3650">
+    <div class="limits">Many scanners use rented cloud addresses that are later reused by legitimate services, so a permanent block slowly
+      becomes a false positive. Only entries <strong>this plugin</strong> added are ever removed — never ones you added by hand. Removal
+      runs hourly and only while live (not in dry run).</div>
   </fieldset>
 
   <fieldset>
@@ -202,6 +216,21 @@
     </div>
   </fieldset>
 
+  <fieldset id="zoraxyFieldset">
+    <legend>Zoraxy's own blacklist (optional second layer)</legend>
+    <div class="row"><input type="checkbox" id="zoraxyBan"> <label for="zoraxyBan">Also ban blocked IPs in Zoraxy's own access-rule blacklist (in addition to Cloudflare)</label></div>
+    <div class="limits">
+      Bans go into the blacklist of the access rules you tick below and expire with the setting above. Two things must be true for a ban to
+      work: the rule's <strong>blacklist must be switched on</strong>, and Zoraxy must see the visitor's <strong>real</strong> address —
+      behind a Cloudflare tunnel that means the address the tunnel connects from (this server's own addresses, e.g. <code>127.0.0.1</code>
+      and its LAN IP) must be in Zoraxy's <em>Trusted Proxies</em>, with the rule's <em>Trust proxy headers only</em> on. See the README
+      ("Zoraxy's own blacklist"). Uses the API permissions Zoraxy lists for this plugin — restart Zoraxy once after installing this version.
+    </div>
+    <div id="zoraxyStatus" class="limits" style="margin:0.5rem 0"></div>
+    <div id="zoraxyRules"></div>
+    <button type="button" id="zoraxyRefresh" class="secondary">Refresh Zoraxy rules</button>
+  </fieldset>
+
   <button type="button" id="saveBtn">Save</button>
   <span id="saveStatus"></span>
 </form>
@@ -261,10 +290,75 @@ document.querySelectorAll("button.reveal").forEach(btn => {
 document.addEventListener("visibilitychange", () => { if (document.hidden) hideSecrets(); });
 window.addEventListener("blur", hideSecrets);
 
+let zoraxyBanSaved = false;   // the saved config runs the Zoraxy layer (which can work without Cloudflare credentials)
+
 function updateEnabledGate(configured) {
   const enabledBox = document.getElementById("enabled");
-  enabledBox.disabled = !(configured || lastTestPassed);
-  document.getElementById("setupBanner").style.display = (configured || lastTestPassed) ? "none" : "block";
+  const unlocked = configured || lastTestPassed || zoraxyBanSaved;
+  enabledBox.disabled = !unlocked;
+  document.getElementById("setupBanner").style.display = unlocked ? "none" : "block";
+}
+
+// ---- Zoraxy access-rule picker ----
+let lastZoraxyRules = [];
+let zoraxyRulesLoaded = false;
+let savedRuleSelection = [];
+
+function currentRuleSelection() {
+  const boxes = document.querySelectorAll("#zoraxyRules input[type=checkbox]");
+  return boxes.length ? [...boxes].filter(b => b.checked).map(b => b.value) : savedRuleSelection;
+}
+
+function renderZoraxyRules(want) {
+  const host = document.getElementById("zoraxyRules");
+  host.textContent = "";
+  if (!zoraxyRulesLoaded) return;
+  const wanted = new Set(want);
+  const seen = new Set();
+  const addRow = (id, name, info, warn) => {
+    const row = document.createElement("div");
+    row.className = "zrule";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.value = id;
+    box.checked = wanted.has(id);
+    box.id = "zr_" + id.replace(/[^A-Za-z0-9_-]/g, "_");
+    const label = document.createElement("label");
+    label.htmlFor = box.id;
+    label.appendChild(document.createTextNode(name + " "));
+    const code = document.createElement("code");
+    code.textContent = id;
+    label.appendChild(code);
+    const small = document.createElement("small");
+    small.textContent = info;
+    if (warn) small.className = "zwarn";
+    label.appendChild(small);
+    row.appendChild(box);
+    row.appendChild(label);
+    host.appendChild(row);
+  };
+  lastZoraxyRules.forEach(r => {
+    seen.add(r.id);
+    let info = "blacklist " + (r.blacklist_enabled ? "ON" : "OFF") + " · trust proxy headers " + (r.trust_proxy_headers_only ? "ON" : "OFF (needed behind a proxy/tunnel)");
+    if (!r.blacklist_enabled) info += " — bans have no effect until this rule's blacklist is switched on";
+    addRow(r.id, r.name || r.id, info, !r.blacklist_enabled);
+  });
+  wanted.forEach(id => { if (!seen.has(id)) addRow(id, id, "not found in Zoraxy", true); });
+}
+
+function loadZoraxyRules() {
+  const status = document.getElementById("zoraxyStatus");
+  status.textContent = "Checking Zoraxy's API...";
+  fetch("api/zoraxy/rules").then(readResponse).then(res => {
+    if (!res.ok || !res.body) { status.textContent = "⚠ " + describeFailure(res); return; }
+    const d = res.body;
+    lastZoraxyRules = d.rules || [];
+    zoraxyRulesLoaded = !!d.available;
+    status.textContent = d.available
+      ? "✓ Connected to Zoraxy's API — " + lastZoraxyRules.length + " access rule(s) found."
+      : "⚠ " + (d.error || "Zoraxy's API is not available.");
+    renderZoraxyRules(currentRuleSelection());
+  }).catch(e => { status.textContent = "⚠ " + e.message; });
 }
 
 function fillForm(cfg) {
@@ -272,6 +366,11 @@ function fillForm(cfg) {
   document.getElementById("dryRun").checked = !!cfg.dry_run;
   document.getElementById("reactToBlacklist").checked = !!cfg.react_to_blacklist_event;
   document.getElementById("blockTTL").value = cfg.block_ttl_hours || 24;
+  document.getElementById("blockExpiryDays").value = (typeof cfg.block_expiry_days === "number") ? cfg.block_expiry_days : 14;
+  document.getElementById("zoraxyBan").checked = !!cfg.zoraxy_ban_enabled;
+  zoraxyBanSaved = !!cfg.zoraxy_ban_enabled;
+  savedRuleSelection = cfg.zoraxy_access_rules || [];
+  renderZoraxyRules(savedRuleSelection);
   document.getElementById("logDir").value = cfg.zoraxy_log_dir || "";
   document.getElementById("windowSeconds").value = cfg.ratelimit_window_seconds || 60;
   document.getElementById("threshold").value = cfg.ratelimit_threshold || 30;
@@ -347,6 +446,7 @@ function refresh(fillFields) {
       fillForm(data.config);
     } else {
       const cfg = data.config;
+      zoraxyBanSaved = !!cfg.zoraxy_ban_enabled;
       updateEnabledGate(!!(cfg.cloudflare_api_token && cfg.cloudflare_account_id && cfg.cloudflare_zone_id));
     }
     fillHistory(data.history);
@@ -455,6 +555,9 @@ document.getElementById("saveBtn").addEventListener("click", () => {
     dry_run: document.getElementById("dryRun").checked,
     react_to_blacklist_event: document.getElementById("reactToBlacklist").checked,
     block_ttl_hours: parseInt(document.getElementById("blockTTL").value, 10) || 24,
+    block_expiry_days: (n => Number.isNaN(n) ? 14 : n)(parseInt(document.getElementById("blockExpiryDays").value, 10)),
+    zoraxy_ban_enabled: document.getElementById("zoraxyBan").checked,
+    zoraxy_access_rules: currentRuleSelection(),
     zoraxy_log_dir: document.getElementById("logDir").value,
     ratelimit_window_seconds: parseInt(document.getElementById("windowSeconds").value, 10) || 60,
     ratelimit_threshold: parseInt(document.getElementById("threshold").value, 10) || 30,
@@ -486,7 +589,9 @@ document.getElementById("saveBtn").addEventListener("click", () => {
     .finally(() => { saveBtn.disabled = false; });
 });
 
+document.getElementById("zoraxyRefresh").addEventListener("click", loadZoraxyRules);
 refresh(true);
+loadZoraxyRules();
 setInterval(() => refresh(false), 5000);
 </script>
 </body>

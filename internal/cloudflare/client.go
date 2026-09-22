@@ -82,9 +82,14 @@ func New(accountID, zoneID, token string) *Client {
 }
 
 type apiResponse struct {
-	Success bool             `json:"success"`
-	Errors  []apiResponseErr `json:"errors"`
-	Result  json.RawMessage  `json:"result"`
+	Success    bool             `json:"success"`
+	Errors     []apiResponseErr `json:"errors"`
+	Result     json.RawMessage  `json:"result"`
+	ResultInfo struct {
+		Cursors struct {
+			After string `json:"after"`
+		} `json:"cursors"`
+	} `json:"result_info"`
 }
 
 type apiResponseErr struct {
@@ -93,48 +98,56 @@ type apiResponseErr struct {
 }
 
 func (c *Client) do(ctx context.Context, method, url string, body any, out any) error {
+	_, err := c.doPage(ctx, method, url, body, out)
+	return err
+}
+
+// doPage is do that also returns the pagination cursor ("after") of a list response, "" when there is no more.
+func (c *Client) doPage(ctx context.Context, method, url string, body any, out any) (string, error) {
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return "", err
 		}
 		reader = bytes.NewReader(raw)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, url, reader)
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	var parsed apiResponse
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return &APIError{Status: resp.StatusCode, Message: fmt.Sprintf("cloudflare api: non-JSON response (status %d): %s", resp.StatusCode, string(raw))}
+		return "", &APIError{Status: resp.StatusCode, Message: fmt.Sprintf("cloudflare api: non-JSON response (status %d): %s", resp.StatusCode, string(raw))}
 	}
 	if !parsed.Success {
 		codes := make([]int, 0, len(parsed.Errors))
 		for _, e := range parsed.Errors {
 			codes = append(codes, e.Code)
 		}
-		return &APIError{Status: resp.StatusCode, Codes: codes, Message: fmt.Sprintf("cloudflare api error (status %d): %+v", resp.StatusCode, parsed.Errors)}
+		return "", &APIError{Status: resp.StatusCode, Codes: codes, Message: fmt.Sprintf("cloudflare api error (status %d): %+v", resp.StatusCode, parsed.Errors)}
 	}
 	if out != nil && len(parsed.Result) > 0 {
-		return json.Unmarshal(parsed.Result, out)
+		if err := json.Unmarshal(parsed.Result, out); err != nil {
+			return "", err
+		}
 	}
-	return nil
+	return parsed.ResultInfo.Cursors.After, nil
 }
 
 // VerifyToken confirms the token is valid at all (it may still lack the specific scopes
@@ -373,6 +386,87 @@ func (c *Client) AddIP(ctx context.Context, listID, ip, comment string) error {
 }
 
 const firewallCustomPhase = "http_request_firewall_custom"
+
+// ListItemInfo is one entry of an IP list as Cloudflare reports it.
+type ListItemInfo struct {
+	ID         string `json:"id"`
+	IP         string `json:"ip"`
+	Comment    string `json:"comment"`
+	CreatedOn  string `json:"created_on"`
+	ModifiedOn string `json:"modified_on"`
+}
+
+// FindIPList returns the ID of the named IP list without creating it (used by the expiry pruner, which must
+// never create anything).
+func (c *Client) FindIPList(ctx context.Context, name string) (string, bool, error) {
+	var lists []ipList
+	url := fmt.Sprintf("%s/accounts/%s/rules/lists", c.base(), c.AccountID)
+	if err := c.do(ctx, http.MethodGet, url, nil, &lists); err != nil {
+		return "", false, fmt.Errorf("listing ip lists: %w", err)
+	}
+	for _, l := range lists {
+		if l.Name == name {
+			if l.Kind != "" && l.Kind != "ip" {
+				return "", false, fmt.Errorf("the list %q is a %q list, not an IP list", name, l.Kind)
+			}
+			return l.ID, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// ListItems returns the items of a list, following Cloudflare's cursor pagination (500 per page). It stops
+// after maxPages pages as a runaway guard and reports an error rather than a silently partial result if the
+// list is longer than that, so callers never act on incomplete data.
+func (c *Client) ListItems(ctx context.Context, listID string) ([]ListItemInfo, error) {
+	const perPage, maxPages = 500, 50
+	var all []ListItemInfo
+	cursor := ""
+	for page := 0; page < maxPages; page++ {
+		url := fmt.Sprintf("%s/accounts/%s/rules/lists/%s/items?per_page=%d", c.base(), c.AccountID, listID, perPage)
+		if cursor != "" {
+			url += "&cursor=" + cursor
+		}
+		var items []ListItemInfo
+		after, err := c.doPage(ctx, http.MethodGet, url, nil, &items)
+		if err != nil {
+			return nil, fmt.Errorf("listing items of %s: %w", listID, err)
+		}
+		all = append(all, items...)
+		if after == "" || after == cursor || len(items) == 0 {
+			return all, nil
+		}
+		cursor = after
+	}
+	return nil, fmt.Errorf("list %s has more than %d items - refusing to act on a partial view", listID, perPage*maxPages)
+}
+
+// DeleteItems removes the given items (by Cloudflare item ID) from the list. It refuses an empty request:
+// Cloudflare's replace/delete calls treat "no items" specially in places, and removing nothing must never be
+// able to turn into removing everything.
+func (c *Client) DeleteItems(ctx context.Context, listID string, ids []string) error {
+	if len(ids) == 0 {
+		return errors.New("refusing to send a delete with no item IDs")
+	}
+	type itemRef struct {
+		ID string `json:"id"`
+	}
+	body := struct {
+		Items []itemRef `json:"items"`
+	}{}
+	for _, id := range ids {
+		if id == "" {
+			return errors.New("refusing to send a delete containing an empty item ID")
+		}
+		body.Items = append(body.Items, itemRef{ID: id})
+	}
+	url := fmt.Sprintf("%s/accounts/%s/rules/lists/%s/items", c.base(), c.AccountID, listID)
+	var op bulkOperation
+	if err := c.do(ctx, http.MethodDelete, url, body, &op); err != nil {
+		return fmt.Errorf("deleting %d item(s) from %s: %w", len(ids), listID, err)
+	}
+	return nil
+}
 
 type ruleset struct {
 	ID    string `json:"id"`

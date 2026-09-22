@@ -37,3 +37,8 @@ cloudflarewaf.json
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Runtime state written by the plugin next to its binary
+zoraxy_bans.json
+zoraxy_bans.json.tmp
+zoraxy_bans.json.corrupt-*
