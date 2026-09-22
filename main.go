@@ -45,7 +45,7 @@ func main() {
 		Name:          "Zoraxy Cloudflare WAF plugin",
 		Author:        "Braedach",
 		AuthorContact: "https://github.com/Braedach",
-		Description:   "Watches Zoraxy's access log and blacklist events, and mirrors abusive client IPs into a Cloudflare IP List referenced by a custom WAF rule.",
+		Description:   "Detects scanners and abusive clients from Zoraxy's access log and blocks them at Cloudflare's edge (one IP List + one WAF rule), optionally also in Zoraxy's own blacklist. Blocks expire automatically. Dry-run by default.",
 		URL:           "https://github.com/Braedach/zoraxy-cloudflare-waf",
 		Type:          plugin.PluginType_Utilities,
 		VersionMajor:  0,
