@@ -3,6 +3,9 @@
 Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's plugin list).
 
 ## Unreleased
+- **Expiry log line fixed:** an address removed from both Cloudflare and Zoraxy was listed twice and double-counted in the
+  `expired` action (`ip=2 IP(s)` for one address). The action now lists and counts distinct addresses. Cosmetic only: the
+  removals themselves were always correct, and the per-layer `expiry: removed N …` journal lines are unchanged.
 - `build.sh release` builds every published architecture (amd64, arm64, ARMv7, 386) into `build/release/` with `SHA256SUMS`,
   named as the plugin store expects; `./build.sh <arch>…` builds a specific list.
 - README: install from the release with checksum verification, requirements, and a Troubleshooting section (chief among them: the
