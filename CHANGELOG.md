@@ -2,7 +2,11 @@
 
 Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's plugin list).
 
-## Unreleased
+## 0.3.1 — 2026-10-07
+**Why this release:** the first real expiry removals ran in production on 2026-10-06 and worked (Cloudflare and Zoraxy sides
+removed together, hourly, no errors), which also exposed a cosmetic bug in the journal line. 0.3.1 fixes that line and
+records the verification. **Behaviour is otherwise identical to 0.3.0**: detection, blocking and what expiry removes are
+unchanged.
 - **Expiry log line fixed:** an address removed from both Cloudflare and Zoraxy was listed twice and double-counted in the
   `expired` action (`ip=2 IP(s)` for one address). The action now lists and counts distinct addresses. Cosmetic only: the
   removals themselves were always correct, and the per-layer `expiry: removed N …` journal lines are unchanged.

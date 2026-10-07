@@ -346,7 +346,7 @@ layer is on). There is no unblock button in the plugin yet. Detection is deliber
 
 ## Status
 
-**v0.3.0 — working in production.** Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
+**v0.3.1 — working in production.** Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
 2026-09-21, the Zoraxy-blacklist layer since 2026-09-22.
 
 - *Latest soak — 12.7 hours with both layers live:* **15 blocks, every one a genuine scanner** (`.DS_Store` and `/.git/config`
@@ -370,8 +370,10 @@ layer is on). There is no unblock button in the plugin yet. Detection is deliber
   failed read never leads to a write, that other rules are never resent, and that expiry only removes entries this plugin created
   (`go vet ./... && go test ./...`, no network needed; race detector clean).
 
-**Not yet exercised in production:** an actual expiry *removal*. The pruner has run hourly against a real list for days and
-correctly found nothing old enough to remove (default 14 days), so deletion is so far covered only by the tests.
+**Expiry removal is verified in production.** The first bans reached 14 days on 2026-10-06 and have been removed hourly since,
+from the Cloudflare list and from Zoraxy's blacklist together, with no errors. Only entries this plugin created were touched.
+(v0.3.0 logged an address removed from both layers twice and counted it twice, e.g. `ip=2 IP(s)` for one address; v0.3.1
+reports each address once. The removals themselves were always correct.)
 
 **Not implemented:** a manual "unblock this IP" button, architectures other than linux/amd64, and additional pattern sources
 (for example fail2ban filter rules).
