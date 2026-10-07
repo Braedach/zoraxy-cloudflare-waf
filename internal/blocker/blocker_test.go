@@ -428,6 +428,38 @@ func TestPrune_ZoraxyBansExpireIndependently_AndOnlyOursAreTouched(t *testing.T)
 	}
 }
 
+func TestPrune_AnAddressInBothLayersIsReportedOnce(t *testing.T) {
+	s := live()
+	s.zoraxyOn = true
+	h := build(t, expiryCF(
+		item("old-ours", "203.0.113.1", "zoraxy/logtail: probe", iso(20)),
+		item("old-ours-2", "203.0.113.9", "zoraxy/logtail: probe", iso(20)),
+	), zxRoutes(defaultRule, `"OK"`), s)
+	_ = h.bans.Record("203.0.113.1", []string{"default"}, now.Add(-20*24*time.Hour))
+	h.b.PruneExpired(context.Background(), now)
+
+	hist := h.b.History()
+	if len(hist) != 1 {
+		t.Fatalf("expected one 'expired' action, got %+v", hist)
+	}
+	if got := strings.Count(hist[0].Detail, "203.0.113.1"); got != 1 {
+		t.Errorf("an address removed from both layers must be listed once, got %d in %q", got, hist[0].Detail)
+	}
+	if hist[0].IP != "2 IP(s)" {
+		t.Errorf("the count must be of distinct addresses (203.0.113.1 and .9), got %q", hist[0].IP)
+	}
+}
+
+func TestUniqueInOrder(t *testing.T) {
+	got := uniqueInOrder([]string{"b", "a", "b", "c", "a"})
+	if strings.Join(got, ",") != "b,a,c" {
+		t.Errorf("want first occurrences in order, got %v", got)
+	}
+	if len(uniqueInOrder(nil)) != 0 {
+		t.Error("nil in, empty out")
+	}
+}
+
 func TestPrune_AFailedUnbanKeepsTheRecordToRetry(t *testing.T) {
 	s := live()
 	s.zoraxyOn = true

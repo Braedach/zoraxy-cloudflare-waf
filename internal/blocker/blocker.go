@@ -368,6 +368,8 @@ func (b *Blocker) PruneExpired(ctx context.Context, now time.Time) {
 	var removed []string
 	removed = append(removed, b.pruneCloudflare(ctx, cutoff, days)...)
 	removed = append(removed, b.pruneZoraxy(ctx, cutoff, days)...)
+	// An address held in both layers is reported once: the action counts and lists distinct addresses.
+	removed = uniqueInOrder(removed)
 
 	if len(removed) > 0 {
 		shown := removed
@@ -377,6 +379,20 @@ func (b *Blocker) PruneExpired(ctx context.Context, now time.Time) {
 		b.record(Action{Time: now, IP: fmt.Sprintf("%d IP(s)", len(removed)), Source: "expiry", Result: "expired",
 			Reason: fmt.Sprintf("blocked more than %d days ago", days), Detail: strings.Join(shown, ", ")})
 	}
+}
+
+// uniqueInOrder drops repeated strings, keeping the first occurrence of each.
+func uniqueInOrder(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := in[:0:0]
+	for _, s := range in {
+		if _, dup := seen[s]; dup {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 func (b *Blocker) pruneCloudflare(ctx context.Context, cutoff time.Time, days int) []string {
