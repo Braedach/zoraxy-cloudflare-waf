@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -59,9 +60,27 @@ var probePatterns = []struct {
 	{"ssh-key", regexp.MustCompile(`(?i)/id_(rsa|ed25519|ecdsa)(?:[^a-z0-9]|$)`)},
 }
 
+// knownLegitimatePaths are exact request paths that look like probes to a pattern but are an application's own
+// front-end files. Each entry is matched against the WHOLE raw path (query string ignored), never as a prefix or
+// a substring, and never against the decoded form - so lookalikes (/x/types/credentials.json, a different
+// extension, an encoded variant) are still flagged. Keep this list tiny: every entry is a path no scanner is
+// expected to rely on, and each one needs a test and a note saying which application it belongs to.
+var knownLegitimatePaths = map[string]string{
+	// n8n's editor loads its list of credential TYPE definitions (static public data, not credentials) from here
+	// on every page load, so anyone using n8n through the proxy would otherwise be banned for using it.
+	"/types/credentials.json": "n8n",
+}
+
 // matchProbePath reports which probe pattern (if any) the request path matches, checking both the raw
 // and the percent-decoded form so %2e%67it style evasion doesn't slip through.
 func matchProbePath(path string) (string, bool) {
+	bare := path
+	if i := strings.IndexByte(bare, '?'); i >= 0 {
+		bare = bare[:i]
+	}
+	if _, ok := knownLegitimatePaths[bare]; ok {
+		return "", false
+	}
 	forms := []string{path}
 	if dec, err := url.PathUnescape(path); err == nil && dec != path {
 		forms = append(forms, dec)
