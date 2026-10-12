@@ -2,7 +2,11 @@
 
 Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's plugin list).
 
-## Unreleased
+## 0.3.2 — 2026-10-12
+**Why this release:** a false positive found while reviewing a week of production logs. n8n's editor requests
+`/types/credentials.json` on every page load and the credential-file pattern flagged it, so anyone using n8n through the proxy
+from a public address would have been banned in both layers. Nobody was affected (it was only ever seen from a private address,
+which the plugin skips). 0.3.2 adds an exact-path exception for that one file. **Everything else is unchanged.**
 - **False positive fixed: n8n.** n8n's editor loads `/types/credentials.json` (a static list of credential *type* definitions,
   not credentials) on every page load, and the credential-file pattern matched it, so anyone using n8n through the proxy from a
   public address would have been banned in both layers. Seen in production only from a private address, where the plugin
