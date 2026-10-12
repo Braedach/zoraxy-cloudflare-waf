@@ -81,7 +81,9 @@ both feed a single decision funnel (`internal/blocker`):
    other ~140 public IPs in that sample was flagged by them. The set is deliberately narrow: bare `.php`, `phpinfo`, `wp-*`,
    `config.json`, `.zip`/`.bak`/`.sql` are **not** included, because legitimate sites use them and a false
    positive locks an operator out of their own site. `/.well-known/` (ACME, webfinger, nodeinfo) never
-   matches.
+   matches. One exact-path exception exists, for an application's own front-end file that looks like a probe:
+   n8n's `/types/credentials.json` (a static list of credential *types*). It matches the whole path only, so
+   `/credentials.json` and lookalikes are still flagged.
 2. **Event subscriber** listens for Zoraxy's own `blacklistedIpBlocked` event, so an IP
    your existing access-rule blacklist just blocked gets mirrored into Cloudflare
    immediately.

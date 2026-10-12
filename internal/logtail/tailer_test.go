@@ -122,3 +122,32 @@ func TestPrivateAndOddLinesAreHandledWithoutPanic(t *testing.T) {
 		_ = collect(l) // must not panic
 	}
 }
+
+// n8n's editor requests /types/credentials.json on every page load; that must not get its user banned.
+// The exception is exact: lookalikes are still flagged.
+func TestKnownLegitimatePaths_N8nTypesFileIsNotFlagged(t *testing.T) {
+	for _, p := range []string{"/types/credentials.json", "/types/credentials.json?v=1"} {
+		if got := collect(line("203.0.113.9", "Mozilla/5.0", "GET", p, 200)); len(got) != 0 {
+			t.Errorf("%s is n8n's own file and must not be flagged, got %+v", p, got)
+		}
+	}
+}
+
+func TestKnownLegitimatePaths_LookalikesAreStillFlagged(t *testing.T) {
+	for _, p := range []string{
+		"/credentials.json",            // the classic scanner target
+		"/x/types/credentials.json",    // different directory
+		"/api/types/credentials.json",  // different directory
+		"/types/Credentials.json",      // case variant is not n8n's path
+		"/types/credentials.yaml",      // different extension
+		"/types/credentials.json.yaml", // longer name
+		"/types/service-account.json",  // other credential-named file in the same directory
+		"/types/%63redentials.json",    // encoded form: judged on the decoded path, not exempt
+		"/types/credentials.json/../../credentials.json",
+	} {
+		got := collect(line("203.0.113.9", "Mozilla/5.0", "GET", p, 200))
+		if len(got) != 1 {
+			t.Errorf("%s must still be flagged, got %+v", p, got)
+		}
+	}
+}

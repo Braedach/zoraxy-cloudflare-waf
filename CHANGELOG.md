@@ -2,6 +2,14 @@
 
 Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's plugin list).
 
+## Unreleased
+- **False positive fixed: n8n.** n8n's editor loads `/types/credentials.json` (a static list of credential *type* definitions,
+  not credentials) on every page load, and the credential-file pattern matched it, so anyone using n8n through the proxy from a
+  public address would have been banned in both layers. Seen in production only from a private address, where the plugin
+  already skips banning, so no one was affected yet. The fix is an **exact-path exception** (whole raw path, query string
+  ignored; never a prefix, never the decoded form). Lookalikes such as `/credentials.json`, `/x/types/credentials.json`,
+  other extensions and encoded variants are still flagged; tests cover both directions. Detection is otherwise unchanged.
+
 ## 0.3.1 — 2026-10-07
 **Why this release:** the first real expiry removals ran in production on 2026-10-06 and worked (Cloudflare and Zoraxy sides
 removed together, hourly, no errors), which also exposed a cosmetic bug in the journal line. 0.3.1 fixes that line and
