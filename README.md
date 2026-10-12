@@ -348,7 +348,7 @@ layer is on). There is no unblock button in the plugin yet. Detection is deliber
 
 ## Status
 
-**v0.3.1 — working in production.** Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
+**v0.3.2 — working in production.** Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
 2026-09-21, the Zoraxy-blacklist layer since 2026-09-22.
 
 - *Latest soak — 12.7 hours with both layers live:* **15 blocks, every one a genuine scanner** (`.DS_Store` and `/.git/config`
