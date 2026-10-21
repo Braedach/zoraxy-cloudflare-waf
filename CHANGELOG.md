@@ -2,7 +2,7 @@
 
 Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's plugin list).
 
-## 0.3.3 — Unreleased
+## 0.3.3 — 2026-10-21
 **Why this release:** the Recent actions table was in memory, so every Zoraxy restart emptied it, and Zoraxy restarts weekly when it self-updates. Operators
 and report writers lost the record of what the plugin had done (the journal kept it, but mixed with other output).
 - **Persistent action history.** Every action is now appended to `zoraxy_actions.jsonl` next to the plugin binary (one JSON object per line: time,
