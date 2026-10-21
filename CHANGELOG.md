@@ -2,6 +2,15 @@
 
 Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's plugin list).
 
+## 0.3.3 — Unreleased
+**Why this release:** the Recent actions table was in memory, so every Zoraxy restart emptied it, and Zoraxy restarts weekly when it self-updates. Operators
+and report writers lost the record of what the plugin had done (the journal kept it, but mixed with other output).
+- **Persistent action history.** Every action is now appended to `zoraxy_actions.jsonl` next to the plugin binary (one JSON object per line: time,
+  address, reason, source, result, detail), and the table is restored from it on start. Size-capped (5 MB, with one rotated copy, so about 10 MB at most),
+  mode 0600, no credentials in it. A write failure is logged once and ignored: it can never stop a ban. `skipped-duplicate` entries are not
+  written (the same rule the journal uses), and dedup state is not restored, so a restart never suppresses a block.
+- Behaviour is otherwise identical to 0.3.2: detection, bans and expiry are unchanged.
+
 ## 0.3.2 — 2026-10-12
 **Why this release:** a false positive found while reviewing a week of production logs. n8n's editor requests
 `/types/credentials.json` on every page load and the credential-file pattern flagged it, so anyone using n8n through the proxy

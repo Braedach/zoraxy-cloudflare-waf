@@ -221,8 +221,8 @@ Two different settings, easy to mix up:
 
 ### Seeing what it is doing
 
-- The **Recent actions** table on the plugin's page. It is in memory only — it empties whenever the plugin
-  or Zoraxy restarts.
+- The **Recent actions** table on the plugin's page, restored from `zoraxy_actions.jsonl` (next to the plugin binary) when the plugin
+  starts, so a restart no longer empties it (from v0.3.3; earlier versions kept it in memory only).
 - The Zoraxy journal, which keeps history (Zoraxy captures the plugin's output):
 
   ```bash
@@ -330,9 +330,10 @@ the CSRF token (injected into the page as `{{.csrfToken}}`) back in an **`X-CSRF
 
 ## Troubleshooting
 
-**The Recent actions table is empty.** It is kept in memory, so restarting Zoraxy (or the plugin) clears it. Nothing is lost: the
-blocks themselves, the Cloudflare list, the Zoraxy bans and the plugin's own ban record all survive a restart. The durable log is
-the journal — `journalctl -u zoraxy | grep -F "Zoraxy Cloudflare WAF plugin"` — which also carries an hourly heartbeat and an
+**The Recent actions table is empty.** From v0.3.3 it is restored from `zoraxy_actions.jsonl` on start, so an empty table means the file is
+missing or unreadable (the journal says why: look for `history:` lines). On v0.3.2 and earlier it was kept in memory only and a restart
+cleared it. Either way nothing is lost: the blocks themselves, the Cloudflare list, the Zoraxy bans and the plugin's own ban record all
+survive a restart. The other durable log is the journal — `journalctl -u zoraxy | grep -F "Zoraxy Cloudflare WAF plugin"` — which also carries an hourly heartbeat and an
 hourly expiry line, so you can tell "running, nothing to do" from "not running".
 
 **Nothing appears in Cloudflare.** Expected until the first real block: the IP list and the WAF rule are created lazily. Until then
@@ -410,7 +411,7 @@ The plugin creates things in your Cloudflare account and in Zoraxy that it **doe
    ```bash
    python3 -c 'import json; print("\n".join(json.load(open("zoraxy_bans.json"))))'
    ```
-5. **Revoke the API token** in Cloudflare (My Profile or Manage Account, API Tokens) and delete the plugin folder. The folder's `cloudflarewaf.json` holds the token.
+5. **Revoke the API token** in Cloudflare (My Profile or Manage Account, API Tokens) and delete the plugin folder. The folder's `cloudflarewaf.json` holds the token; `zoraxy_actions.jsonl` (v0.3.3 and later) is the history of what the plugin did.
 
 ## Verifying a release
 
@@ -430,7 +431,7 @@ not match.
   Give it only the two scopes listed under [Creating a correctly scoped API token](#creating-a-correctly-scoped-api-token).
 - **What it changes in Cloudflare.** One account IP list and one custom WAF rule that references it. It never resends or edits your other rules (the tests prove
   that, including that a failed read never leads to a write).
-- **Files it writes**, next to the binary: `cloudflarewaf.json`, `zoraxy_bans.json` (and a short-lived `zoraxy_bans.json.tmp`, or `zoraxy_bans.json.corrupt-<time>` if the file was ever unreadable).
+- **Files it writes**, next to the binary: `cloudflarewaf.json`, `zoraxy_bans.json` (and a short-lived `zoraxy_bans.json.tmp`, or `zoraxy_bans.json.corrupt-<time>` if the file was ever unreadable) and, from v0.3.3, the action history `zoraxy_actions.jsonl` (mode 600, at most about 10 MB with its one rotated copy `zoraxy_actions.jsonl.1`; it holds only what the journal already shows, no credentials).
 - **Safe by default.** It ships disabled and in dry-run, so it does nothing until you turn it on and turn dry-run off.
 - **Reporting a vulnerability:** see [SECURITY.md](SECURITY.md).
 
@@ -439,7 +440,7 @@ not match.
 - **One Cloudflare account and one zone per plugin instance.** The IP list is account-wide, but the plugin creates and maintains the WAF rule in a single zone.
   Several zones behind one Zoraxy are not supported yet (asked for in [issue #5](https://github.com/Braedach/zoraxy-cloudflare-waf/issues/5)).
 - **No manual "unblock this IP" button.** Remove the address from the Cloudflare list and from the Zoraxy access rules by hand (see [Troubleshooting](#troubleshooting)).
-- **The Recent actions table is held in memory**; a Zoraxy or plugin restart empties it. The journal is the durable record.
+- **The Recent actions table shows the last 200 actions.** From v0.3.3 it is restored from `zoraxy_actions.jsonl` after a restart (on v0.3.2 and earlier it was in memory only and a restart emptied it). The journal remains the other durable record.
 - **Detection is deliberately narrow** (see [How it works](#how-it-works)): a few path families, exploit patterns and error bursts. It is a reflex against scanners, not a full WAF.
 - **A request Cloudflare itself blocks never reaches Zoraxy's log**, so the plugin cannot learn from it.
 
