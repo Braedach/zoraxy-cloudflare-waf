@@ -6,6 +6,12 @@ List** referenced by a single custom WAF rule — so Cloudflare's edge blocks th
 they ever reach the proxy again. Optionally it also bans them in Zoraxy's own blacklist as a second layer, and
 blocks expire automatically.
 
+**Where to find things:** [Setup](#setup) · [Upgrading](#upgrading) · [How to tell it is working](#how-to-tell-it-is-working) ·
+[Troubleshooting](#troubleshooting) · [Uninstalling and cleaning up](#uninstalling-and-cleaning-up) ·
+[Verifying a release](#verifying-a-release) · [Security and privacy](#security-and-privacy) · [Known limits](#known-limits) ·
+[Compatibility](#compatibility) · [Testing](docs/TESTING.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) ·
+[Reporting a vulnerability](SECURITY.md)
+
 ## Cloudflare limits, and how this plugin manages them
 
 These numbers are Cloudflare's own current documented limits (Free/Pro/Business — verify
@@ -100,8 +106,9 @@ Requirements: **Zoraxy 3.3.4 or newer**, Linux, and a Cloudflare API token if yo
 The plugin ships inert: `enabled: false`, `dry_run: true`.
 
 [Releases](https://github.com/Braedach/zoraxy-cloudflare-waf/releases) carry `amd64`, `arm64`, `arm` (ARMv7) and `386` builds,
-all static and from the same commit. **`amd64` and `386` are the tested ones; `arm64` and ARMv7 are cross-compiled and have not
-been run on real hardware by the author** — they should work, but please report anything that doesn't.
+all static and from the same commit. **`amd64` is the architecture in production use; `386` has been executed (its `-introspect` output checked); `arm64`
+and ARMv7 are cross-compiled and have not been run on real hardware by the author** — they should work, but please report
+anything that doesn't.
 
 **Option A — download the release** (no Go needed; substitute your architecture):
 
@@ -346,11 +353,107 @@ at startup — restart it after copying a plugin in by hand.
 layer is on). There is no unblock button in the plugin yet. Detection is deliberately narrow — see
 [How it works](#how-it-works) for exactly what triggers a block.
 
+## Compatibility
+
+- **Zoraxy:** 3.3.4 or newer. Used in production on 3.3.4, 3.3.5 and the 3.3.5 release candidates 2 and 3 (linux/amd64), including
+  across Zoraxy's own self-updates.
+- **Cloudflare:** any plan that has custom WAF rules and account IP lists. The Free plan works; its limits (five custom rules per zone,
+  a small list quota) are described [above](#cloudflare-limits-and-how-this-plugin-manages-them).
+- **Architectures:** see [Setup](#setup).
+
+## Upgrading
+
+Your settings (`cloudflarewaf.json`) and the ban record (`zoraxy_bans.json`) live next to the binary and are **not** touched by an upgrade.
+
+1. Read the [changelog](CHANGELOG.md) for anything that needs your attention.
+2. Download the new binary and `SHA256SUMS` and verify them exactly as in [Setup](#setup).
+3. Replace the binary **by renaming a new file over the old one** (a running binary cannot be overwritten in place):
+
+   ```bash
+   PLUGIN_DIR=/srv/zoraxy/plugins/com.braedach.zoraxy.cloudflarewaf
+   cp "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf" /root/cloudflarewaf.previous       # keep a rollback copy
+   install -m 755 cloudflarewaf_linux_$ARCH "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf.new"
+   mv -f "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf.new" "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf"
+   ```
+4. Restart Zoraxy (it launches plugins at startup; a restart briefly interrupts proxying, so pick a quiet moment).
+5. Check the [health signs](#how-to-tell-it-is-working) below. To roll back, put the previous binary back the same way and restart.
+
+## How to tell it is working
+
+1. **The process and version.** The plugin's journal line shows the loaded settings (credentials are reported only as `credentials_set=true`):
+
+   ```bash
+   journalctl -u zoraxy | grep -F "Zoraxy Cloudflare WAF plugin" | grep "loaded config" | tail -1
+   ```
+
+   Expect `enabled=true dry_run=false` once you have gone live. The binary reports its version with `./<binary> -introspect`.
+2. **It is alive.** An hourly `expiry:` line and a `logtail: alive` line appear, with no `error`, `fail` or `panic` lines.
+3. **The places a ban lives agree.** For the addresses the plugin banned, three counts should match: the Cloudflare IP list (Cloudflare
+   dashboard, Manage Account, Configurations, Lists), the plugin's ban record (`python3 -c 'import json; print(len(json.load(open("zoraxy_bans.json"))))'`),
+   and the blacklist of each Zoraxy access rule you selected (Zoraxy UI, Access Rules). No private or loopback address should be on the list.
+   A mismatch means one layer failed; the journal line for that ban says which.
+4. **A harmless end-to-end test.** Request a path no real client asks for, for example `/.git/config`, from an address you do not mind banning
+   (not your own), then look for an `action: blocked` line. Remove the test address afterwards (see [Troubleshooting](#troubleshooting)).
+
+## Uninstalling and cleaning up
+
+The plugin creates things in your Cloudflare account and in Zoraxy that it **does not delete itself**. To remove it completely:
+
+1. **Disable the plugin** in Zoraxy's plugin page, or delete its folder, and restart Zoraxy.
+2. **Cloudflare, the rule first.** Security, Security rules: delete the custom rule the plugin created (its name is the **WAF rule name** setting; the
+   default is `Zoraxy CF WAF Sync - managed IP blocklist`). Only that rule; the plugin never edited any other.
+3. **Cloudflare, then the list.** Manage Account, Configurations, Lists: delete the IP list (the **IP list name** setting; default
+   `zoraxy_cf_waf_blocklist`). Cloudflare refuses to delete a list a rule still uses, so do step 2 first.
+4. **Zoraxy's blacklists.** If you used the second layer, remove the addresses the plugin added from the access rules you selected. They are
+   the keys of `zoraxy_bans.json`:
+
+   ```bash
+   python3 -c 'import json; print("\n".join(json.load(open("zoraxy_bans.json"))))'
+   ```
+5. **Revoke the API token** in Cloudflare (My Profile or Manage Account, API Tokens) and delete the plugin folder. The folder's `cloudflarewaf.json` holds the token.
+
+## Verifying a release
+
+Every release has a `SHA256SUMS` file; check it as shown in [Setup](#setup). You can also rebuild a release yourself and compare, because the builds
+are reproducible: with the Go 1.24 toolchain, `git checkout vX.Y.Z && ./build.sh release` produced binaries byte-for-byte identical to the published
+`cloudflarewaf_linux_*` files for v0.3.1 and v0.3.2 on all four architectures (checked 21 October 2026). v0.3.0 predates the release build recipe and will
+not match.
+
+## Security and privacy
+
+- **What it talks to.** Outbound only: `api.cloudflare.com` (the API calls your token authorises: list and rule management) and
+  `www.cloudflare.com/ips-v4` and `/ips-v6` (Cloudflare's published address ranges, so the plugin never bans Cloudflare itself). It sends nothing to
+  the author or any third party, and has no telemetry. Its page is served on `127.0.0.1` only, through Zoraxy's plugin proxy.
+- **What it asks Zoraxy for.** Four API permissions, shown by Zoraxy before you enable the plugin: list access rules, read a blacklist, and add or remove a
+  blacklist entry. They are used only for the optional Zoraxy layer.
+- **Your credentials.** The Cloudflare token lives in `cloudflarewaf.json` (mode 600) in the plugin folder, is masked in the page, and is never written to the journal.
+  Give it only the two scopes listed under [Creating a correctly scoped API token](#creating-a-correctly-scoped-api-token).
+- **What it changes in Cloudflare.** One account IP list and one custom WAF rule that references it. It never resends or edits your other rules (the tests prove
+  that, including that a failed read never leads to a write).
+- **Files it writes**, next to the binary: `cloudflarewaf.json`, `zoraxy_bans.json` (and a short-lived `zoraxy_bans.json.tmp`, or `zoraxy_bans.json.corrupt-<time>` if the file was ever unreadable).
+- **Safe by default.** It ships disabled and in dry-run, so it does nothing until you turn it on and turn dry-run off.
+- **Reporting a vulnerability:** see [SECURITY.md](SECURITY.md).
+
+## Known limits
+
+- **One Cloudflare account and one zone per plugin instance.** The IP list is account-wide, but the plugin creates and maintains the WAF rule in a single zone.
+  Several zones behind one Zoraxy are not supported yet (asked for in [issue #5](https://github.com/Braedach/zoraxy-cloudflare-waf/issues/5)).
+- **No manual "unblock this IP" button.** Remove the address from the Cloudflare list and from the Zoraxy access rules by hand (see [Troubleshooting](#troubleshooting)).
+- **The Recent actions table is held in memory**; a Zoraxy or plugin restart empties it. The journal is the durable record.
+- **Detection is deliberately narrow** (see [How it works](#how-it-works)): a few path families, exploit patterns and error bursts. It is a reflex against scanners, not a full WAF.
+- **A request Cloudflare itself blocks never reaches Zoraxy's log**, so the plugin cannot learn from it.
+
 ## Status
 
 **v0.3.2 — working in production.** Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
 2026-09-21, the Zoraxy-blacklist layer since 2026-09-22.
 
+- *Production results to 21 October 2026 (v0.3.0 to v0.3.2):* in October the plugin banned **94 distinct scanner addresses**, about 40 of them in Google Cloud
+  ranges, from 97 ban actions: 81 by a sensitive-path probe, 10 by an error burst, 5 relayed from Zoraxy's own blacklist and 1 by an exploit pattern; the ban
+  typically landed within one to two seconds of the first probe. On 21 October the Cloudflare list, the plugin's ban record and the blacklists of both selected
+  Zoraxy rules all held the same 62 addresses, no private or loopback address was on the list, and the journal showed no errors, with hourly heartbeat and
+  expiry lines throughout. Expiry has been removing aged bans from both layers (77 expiry actions since the first on 6 October) without error. The v0.3.1 and
+  v0.3.2 release binaries rebuild byte-for-byte identical from their tags (see [Verifying a release](#verifying-a-release)).
 - *Latest soak — 12.7 hours with both layers live:* **15 blocks, every one a genuine scanner** (`.DS_Store` and `/.git/config`
   sweeps, Laravel `/.ENV` probes, `/.claude`/`/.codex` credential hunts, and two Metabase CVE probes that arrived through
   Zoraxy's own `blacklistedIpBlocked` event). **No false positives and no misses** — no public IP that hit a detection rule went
@@ -368,23 +471,26 @@ layer is on). There is no unblock button in the plugin yet. Detection is deliber
   read treated as "no rules"; and a non-existent `PATCH …/items` call — items are added with `POST …/items`). The first live
   attempt then hit the account's **list quota** (Cloudflare error 10019) and stopped safely without writing anything else; that
   error is now explained in plain words, and Test Connection shows the account's lists up front.
-- *Tests:* the Cloudflare and Zoraxy clients are unit-tested against fake servers that record every request — including that a
-  failed read never leads to a write, that other rules are never resent, and that expiry only removes entries this plugin created
-  (`go vet ./... && go test ./...`, no network needed; race detector clean).
+- *Tests:* **63 tests in 5 packages, all passing, race detector clean, `gofmt` and `go vet` clean** (v0.3.2, re-run 21 October 2026). The Cloudflare and
+  Zoraxy clients are tested against fake servers that record every request — including that a failed read never leads to a write, that other rules are
+  never resent, and that expiry only removes entries this plugin created. No network is needed. What each test proves is in [docs/TESTING.md](docs/TESTING.md).
 
 **Expiry removal is verified in production.** The first bans reached 14 days on 2026-10-06 and have been removed hourly since,
 from the Cloudflare list and from Zoraxy's blacklist together, with no errors. Only entries this plugin created were touched.
 (v0.3.0 logged an address removed from both layers twice and counted it twice, e.g. `ip=2 IP(s)` for one address; v0.3.1
 reports each address once. The removals themselves were always correct.)
 
-**Not implemented:** a manual "unblock this IP" button, architectures other than linux/amd64, and additional pattern sources
+**Not implemented:** a manual "unblock this IP" button, more than one Cloudflare zone per plugin instance, and additional pattern sources
 (for example fail2ban filter rules).
 
 ## Development
 
 ```bash
-go vet ./... && go test ./...        # no network: the Cloudflare client is tested against a fake API server
+gofmt -l .                           # must print nothing
+go vet ./... && go test -race ./...  # no network: the Cloudflare client is tested against a fake API server
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and [docs/TESTING.md](docs/TESTING.md) for what the suite covers.
 
 ## Licensing note
 
