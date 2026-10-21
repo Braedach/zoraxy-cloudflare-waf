@@ -2,6 +2,11 @@
 
 Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's plugin list).
 
+## Unreleased
+- Docs only: the `logtail: alive` heartbeat is every 30 minutes (README and TESTING.md said hourly); Known limits now document the multi-zone
+  workaround and the stale settings-page sentence about the in-memory history. No code change.
+- Planned: correct the settings-page text; multi-zone support (issue #5), pending the reporter's answers.
+
 ## 0.3.3 — 2026-10-21
 **Why this release:** the Recent actions table was in memory, so every Zoraxy restart emptied it, and Zoraxy restarts weekly when it self-updates. Operators
 and report writers lost the record of what the plugin had done (the journal kept it, but mixed with other output).

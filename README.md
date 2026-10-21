@@ -439,6 +439,12 @@ not match.
 
 - **One Cloudflare account and one zone per plugin instance.** The IP list is account-wide, but the plugin creates and maintains the WAF rule in a single zone.
   Several zones behind one Zoraxy are not supported yet (asked for in [issue #5](https://github.com/Braedach/zoraxy-cloudflare-waf/issues/5)).
+  **Workaround that works today:** because the IP list is account-wide, add the one-line custom rule `ip.src in $<your_list_name>` by hand in every other zone
+  of the same account, with the action you prefer (Managed Challenge or Block). The plugin keeps the list current and never edits a rule it did not create,
+  so the two do not interfere. Native multi-zone support is under consideration and waiting on answers in the issue (same account? same action in every zone?).
+  Zones in a different Cloudflare account cannot share the list and would need their own instance.
+- **One sentence on the settings page is out of date for v0.3.3.** The "How this works" text says the Recent actions table is kept in memory and empties
+  on restart; since v0.3.3 it is restored from `zoraxy_actions.jsonl` (see below). The page text will be corrected in the next release.
 - **No manual "unblock this IP" button.** Remove the address from the Cloudflare list and from the Zoraxy access rules by hand (see [Troubleshooting](#troubleshooting)).
 - **The Recent actions table shows the last 200 actions.** From v0.3.3 it is restored from `zoraxy_actions.jsonl` after a restart (on v0.3.2 and earlier it was in memory only and a restart emptied it). The journal remains the other durable record.
 - **Detection is deliberately narrow** (see [How it works](#how-it-works)): a few path families, exploit patterns and error bursts. It is a reflex against scanners, not a full WAF.
