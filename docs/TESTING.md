@@ -32,7 +32,7 @@ Release binaries for v0.3.1 and v0.3.2 also rebuild byte-for-byte identical to t
 ## Checking a running installation
 
 The unit tests cannot see your live accounts. To confirm a real installation, use the checklist in the README, "How to tell it is working": the journal shows
-the loaded settings and hourly proof of life, and the Cloudflare list, the plugin's ban record and the selected Zoraxy blacklists agree.
+the loaded settings and proof of life (a `logtail: alive` line every 30 minutes), and the Cloudflare list, the plugin's ban record and the selected Zoraxy blacklists agree.
 
 ## Adding a test
 
