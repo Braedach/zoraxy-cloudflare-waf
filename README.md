@@ -446,7 +446,7 @@ not match.
 
 ## Status
 
-**v0.3.2 — working in production.** Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
+**v0.3.3 — working in production** (the persistent action history, new in v0.3.3, was deployed on 21 October 2026; the results below are from v0.3.0 to v0.3.2 unless stated). Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
 2026-09-21, the Zoraxy-blacklist layer since 2026-09-22.
 
 - *Production results to 21 October 2026 (v0.3.0 to v0.3.2):* in October the plugin banned **94 distinct scanner addresses**, about 40 of them in Google Cloud
@@ -472,7 +472,7 @@ not match.
   read treated as "no rules"; and a non-existent `PATCH …/items` call — items are added with `POST …/items`). The first live
   attempt then hit the account's **list quota** (Cloudflare error 10019) and stopped safely without writing anything else; that
   error is now explained in plain words, and Test Connection shows the account's lists up front.
-- *Tests:* **63 tests in 5 packages, all passing, race detector clean, `gofmt` and `go vet` clean** (v0.3.2, re-run 21 October 2026). The Cloudflare and
+- *Tests:* **71 tests in 5 packages, all passing, race detector clean, `gofmt` and `go vet` clean** (v0.3.3, 21 October 2026; v0.3.2 had 63). The Cloudflare and
   Zoraxy clients are tested against fake servers that record every request — including that a failed read never leads to a write, that other rules are
   never resent, and that expiry only removes entries this plugin created. No network is needed. What each test proves is in [docs/TESTING.md](docs/TESTING.md).
 
