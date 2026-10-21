@@ -6,10 +6,19 @@ List** referenced by a single custom WAF rule — so Cloudflare's edge blocks th
 they ever reach the proxy again. Optionally it also bans them in Zoraxy's own blacklist as a second layer, and
 blocks expire automatically.
 
+## At a glance
+
+- **What it is:** a Zoraxy plugin that turns scanner behaviour in Zoraxy's own access log into automatic bans at Cloudflare's edge, with an optional second layer in Zoraxy's blacklist. Bans expire; it ships in dry-run.
+- **Who it is for:** anyone publishing services through Zoraxy and Cloudflare (the Free plan is enough) who wants scanners stopped in seconds without hand-copying addresses.
+- **Status:** v0.3.3, running in production since 21 September 2026, 71 tests, reproducible release builds. In October to the 21st it banned 94 distinct addresses.
+- **New in v0.3.3:** the Recent actions table now survives restarts (`zoraxy_actions.jsonl`). Docs: the multi-zone workaround, the 30-minute heartbeat and a weekly report script.
+- **Also in this repository:** [`scripts/forensic-report.sh`](scripts/README.md), a read-only weekly report of what reached your proxy and what was refused; [a public analysis of six months of real scanner traffic](docs/forensic/README.md); [a guide to reading that report, including when an AI writes the analysis](docs/forensic/REPORT-GUIDE.md).
+- **The story and the reasoning:** [Zoraxy: Reverse Proxy](https://www.braedach.com/zoraxy-reverse-proxy-2/) on the author's blog.
+
 **Where to find things:** [Setup](#setup) · [Upgrading](#upgrading) · [How to tell it is working](#how-to-tell-it-is-working) ·
 [Troubleshooting](#troubleshooting) · [Uninstalling and cleaning up](#uninstalling-and-cleaning-up) ·
 [Verifying a release](#verifying-a-release) · [Security and privacy](#security-and-privacy) · [Known limits](#known-limits) ·
-[Compatibility](#compatibility) · [Testing](docs/TESTING.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) ·
+[Compatibility](#compatibility) · [Testing](docs/TESTING.md) · [Weekly report script](scripts/README.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) ·
 [Reporting a vulnerability](SECURITY.md)
 
 ## Cloudflare limits, and how this plugin manages them
