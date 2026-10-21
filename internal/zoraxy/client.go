@@ -32,7 +32,7 @@ const (
 )
 
 type Client struct {
-	BaseURL string // e.g. http://127.0.0.1:81
+	BaseURL string // e.g. http://127.0.0.1:<zoraxy-admin-port>
 	APIKey  string
 	HTTP    *http.Client
 }
