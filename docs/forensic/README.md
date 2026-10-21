@@ -12,7 +12,9 @@ Cloudflare's free plan, with this plugin enforcing in seconds. It was written to
 - Cloudflare's alternate-port sweeps, with proxied versus refused counts.
 - The defence layers and what each did, example Cloudflare rules you can reuse (including the alternate-port block and the one-line list
   rule), and the plugin's detection design.
-- Lessons, and a checklist to reproduce the set-up.
+- Where the 94 banned addresses come from, how fast each detector's ban lands (measured, not estimated), what the scanners ask for
+  (628 distinct paths in families), a second-by-second look at two bursts, and how bans arrive in waves.
+- Lessons, a checklist to reproduce the set-up, and a short FAQ.
 
 ## What was left out, on purpose
 
