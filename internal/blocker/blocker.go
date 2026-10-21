@@ -56,6 +56,7 @@ type Deps struct {
 	GetZoraxyRules      func() []string
 	NewZoraxyClient     func() (*zoraxy.Client, bool) // ok=false if the plugin has no Zoraxy API key
 	Bans                *BanStore                     // what the plugin banned in Zoraxy, and when (for expiry)
+	History             *HistoryStore                 // optional: persists the action history so it survives a restart
 }
 
 type Blocker struct {
@@ -74,11 +75,20 @@ type Blocker struct {
 const historyLimit = 200
 
 func New(deps Deps, checker *ipfilter.Checker) *Blocker {
-	return &Blocker{
+	b := &Blocker{
 		deps:    deps,
 		checker: checker,
 		seen:    make(map[string]time.Time),
 	}
+	if deps.History != nil {
+		// Restore the recent history from disk. Only the display buffer is restored: dedup state (seen) starts empty, so a
+		// restart never suppresses a block.
+		b.history = deps.History.Load(historyLimit)
+		if n := len(b.history); n > 0 {
+			log.Printf("history: restored %d recent action(s) from disk", n)
+		}
+	}
+	return b
 }
 
 func (b *Blocker) History() []Action {
@@ -97,8 +107,14 @@ func (b *Blocker) record(a Action) {
 	}
 	b.mu.Unlock()
 
+	// Persist to the history file (best effort: a disk problem must never stop a ban). skipped-duplicate is left out for the same
+	// reason as the journal below: one hammering scanner would flood the file.
+	if b.deps.History != nil && a.Result != "skipped-duplicate" {
+		b.deps.History.noteResult(b.deps.History.Append(a))
+	}
+
 	// Every outcome goes to the journal too (Zoraxy captures plugin stdout), so `journalctl -u zoraxy`
-	// shows what the plugin is doing and it survives a restart - the UI table is in-memory only.
+	// shows what the plugin is doing and it survives a restart.
 	// skipped-duplicate is left out: a scanner hammering one IP would flood the journal, and the first
 	// hit for that IP already has its line (the UI table still lists every one).
 	if a.Result != "skipped-duplicate" {

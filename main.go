@@ -29,11 +29,12 @@ import (
 )
 
 const (
-	PLUGIN_ID   = "com.braedach.zoraxy.cloudflarewaf"
-	UI_PATH     = "/ui"
-	EVENT_PATH  = "/events"
-	CONFIG_FILE = "cloudflarewaf.json"
-	BANS_FILE   = "zoraxy_bans.json" // what the plugin banned in Zoraxy, and when (for expiry)
+	PLUGIN_ID    = "com.braedach.zoraxy.cloudflarewaf"
+	UI_PATH      = "/ui"
+	EVENT_PATH   = "/events"
+	CONFIG_FILE  = "cloudflarewaf.json"
+	BANS_FILE    = "zoraxy_bans.json"     // what the plugin banned in Zoraxy, and when (for expiry)
+	ACTIONS_FILE = "zoraxy_actions.jsonl" // append-only action history (one JSON object per line), restored on start
 )
 
 //go:embed www/*
@@ -128,6 +129,7 @@ func main() {
 		GetZoraxyRules:      func() []string { return cfgStore.get().ZoraxyAccessRules },
 		NewZoraxyClient:     newZoraxyClient,
 		Bans:                bans,
+		History:             blocker.OpenHistoryStore(ACTIONS_FILE, 5<<20), // about 10 MB at most with its one rotated copy
 	}
 	blk := blocker.New(deps, checker)
 	go pruneExpiredForever(blk)

@@ -221,8 +221,8 @@ Two different settings, easy to mix up:
 
 ### Seeing what it is doing
 
-- The **Recent actions** table on the plugin's page. It is in memory only — it empties whenever the plugin
-  or Zoraxy restarts.
+- The **Recent actions** table on the plugin's page, restored from `zoraxy_actions.jsonl` (next to the plugin binary) when the plugin
+  starts, so a restart no longer empties it (from v0.3.3; earlier versions kept it in memory only).
 - The Zoraxy journal, which keeps history (Zoraxy captures the plugin's output):
 
   ```bash
@@ -330,9 +330,10 @@ the CSRF token (injected into the page as `{{.csrfToken}}`) back in an **`X-CSRF
 
 ## Troubleshooting
 
-**The Recent actions table is empty.** It is kept in memory, so restarting Zoraxy (or the plugin) clears it. Nothing is lost: the
-blocks themselves, the Cloudflare list, the Zoraxy bans and the plugin's own ban record all survive a restart. The durable log is
-the journal — `journalctl -u zoraxy | grep -F "Zoraxy Cloudflare WAF plugin"` — which also carries an hourly heartbeat and an
+**The Recent actions table is empty.** From v0.3.3 it is restored from `zoraxy_actions.jsonl` on start, so an empty table means the file is
+missing or unreadable (the journal says why: look for `history:` lines). On v0.3.2 and earlier it was kept in memory only and a restart
+cleared it. Either way nothing is lost: the blocks themselves, the Cloudflare list, the Zoraxy bans and the plugin's own ban record all
+survive a restart. The other durable log is the journal — `journalctl -u zoraxy | grep -F "Zoraxy Cloudflare WAF plugin"` — which also carries an hourly heartbeat and an
 hourly expiry line, so you can tell "running, nothing to do" from "not running".
 
 **Nothing appears in Cloudflare.** Expected until the first real block: the IP list and the WAF rule are created lazily. Until then
