@@ -62,7 +62,7 @@ unchanged.
   whatever the response status — single-page apps answer such paths with 200, so error counts alone missed them.
 - **Safer Cloudflare write path:** rules are added/edited with the single-rule API and never resent; a failed read writes nothing;
   a rule with the plugin's name that it did not create is never touched; list items are added with `POST …/items`.
-- Journal logging of every decision, an hourly heartbeat, masked account/zone IDs, block-action dropdown, in-page help,
+- Journal logging of every decision, a heartbeat every 30 minutes, masked account/zone IDs, block-action dropdown, in-page help,
   IP-list-name validation, working Save inside Zoraxy's sandboxed frame, `X-CSRF-Token` fix.
 
 ## 0.1.0 — 2026-09-19
