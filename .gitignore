@@ -42,3 +42,7 @@ cloudflarewaf.json
 zoraxy_bans.json
 zoraxy_bans.json.tmp
 zoraxy_bans.json.corrupt-*
+
+# Action history written by the plugin (v0.3.3 and later)
+zoraxy_actions.jsonl
+zoraxy_actions.jsonl.1
