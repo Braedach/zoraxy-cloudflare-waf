@@ -465,8 +465,7 @@ not match.
 2026-09-21, the Zoraxy-blacklist layer since 2026-09-22.
 
 - *Production results to 21 October 2026 (v0.3.0 to v0.3.2):* in October the plugin banned **94 distinct scanner addresses**, about 40 of them in Google Cloud
-  ranges, from 97 ban actions: 81 by a sensitive-path probe, 10 by an error burst, 5 relayed from Zoraxy's own blacklist and 1 by an exploit pattern; the ban
-  typically landed within one to two seconds of the first probe. On 21 October the Cloudflare list, the plugin's ban record and the blacklists of both selected
+  ranges, from 97 ban actions: 81 by a sensitive-path probe, 10 by an error burst, 5 relayed from Zoraxy's own blacklist and 1 by an exploit pattern; from the triggering request to the ban the median was 3 seconds (1 to 4 seconds for the sensitive-path detector, which does most of the work; error bursts take about 30 seconds by design, because they must wait for the evidence), and while an address was banned every request that reached Zoraxy was refused by its blacklist. On 21 October the Cloudflare list, the plugin's ban record and the blacklists of both selected
   Zoraxy rules all held the same 62 addresses, no private or loopback address was on the list, and the journal showed no errors, with the 30-minute heartbeat and
   hourly expiry lines throughout. Expiry has been removing aged bans from both layers (77 expiry actions since the first on 6 October) without error. The v0.3.1 and
   v0.3.2 release binaries rebuild byte-for-byte identical from their tags (see [Verifying a release](#verifying-a-release)).
