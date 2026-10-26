@@ -67,8 +67,8 @@ would be let through. Test Connection shows your lists and warns about all of th
 **The real ceiling is the list's 10,000-item cap**, not the rule. `Config.MaxIPListItems`
 (default 10,000) is this plugin's own pre-flight guard — checked live before every add, so
 a full list fails softly (`skipped-list-full` in the action log) instead of erroring
-against the Cloudflare API. There's no automatic pruning yet (see Status below) — a list
-that fills up needs a manual trim in the Cloudflare dashboard until that's built.
+against the Cloudflare API. Blocks expire automatically (default 14 days, see [Automatic expiry](#automatic-expiry)), which keeps the list from
+growing without limit; if it still fills inside that window, additions fail softly until older entries expire or you trim the list in the Cloudflare dashboard.
 
 ## How it works
 
@@ -104,7 +104,7 @@ both feed a single decision funnel (`internal/blocker`):
    immediately.
 
 Every candidate is validated (`internal/ipfilter`) against Cloudflare's own published edge
-ranges before it's ever sent to Cloudflare — a candidate IP that's private/loopback, or
+ranges before it's ever sent to Cloudflare — a candidate IP that's private, loopback, link-local or unspecified, or
 that's itself a Cloudflare edge IP (meaning something upstream read the wrong header), is
 rejected rather than blocked. **Always trust `CF-Connecting-IP`, never
 `X-Forwarded-For`**, on tunnel-relayed traffic — the latter is attacker-controlled.
@@ -162,8 +162,9 @@ The token, account ID and zone ID fields are masked (use **Show**; they re-hide 
 
 To pick up a replaced binary, restart Zoraxy.
 
-Once the plugin is listed in Zoraxy's own plugin store, installing it from there does all of the above for you: Zoraxy creates the
-folder, names the binary to match, downloads the icon, and shows you the API permissions the plugin asks for before you enable it.
+The plugin is listed in Zoraxy's own plugin store (accepted 25 September 2026), and installing it from there does all of the above for you: Zoraxy creates the
+folder, names the binary to match, downloads the icon, and shows you the API permissions the plugin asks for before you enable it. A store install tracks the
+*latest* GitHub release, so a release candidate (pre-release) is never installed by the store; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Creating a correctly scoped API token
 
@@ -210,7 +211,7 @@ account ID and zone ID are all set, or **Also ban in Zoraxy** is ticked (Zoraxy-
 
 **Defaults are deliberately inert**: `enabled: false` and `dry_run: true` out of the box.
 - **Enabled off** — nothing is acted on.
-- **Enabled + Dry run** — every decision is recorded and logged, but **nothing is written to Cloudflare**
+- **Enabled + Dry run** — every decision is recorded and logged, but **nothing is written to Cloudflare and nothing is banned in Zoraxy**
   (the only call the plugin makes to your Cloudflare account is Test Connection's read-only check; it also
   downloads Cloudflare's public edge IP ranges, used to avoid ever blocking Cloudflare itself).
 - **Enabled, Dry run off** — live. The first real block creates the IP list and the WAF rule if they don't
@@ -244,7 +245,8 @@ Two different settings, easy to mix up:
   `more than N 4xx/5xx responses within Ws`)
   (`blocked`, `partial`, `dry-run`, `expired`, `error`, `skipped-invalid-ip`, `skipped-disabled`, `skipped-list-full`; repeat
   hits for an already-actioned IP are left out of the journal but still appear in the table), and a
-  `logtail: alive` heartbeat every 30 minutes with lines-read / candidates-raised counters.
+  `logtail: alive` heartbeat every 30 minutes with lines-read / candidates-raised counters and an `expiry:` line every hour. An address already actioned is
+  skipped (`skipped-duplicate`) until the **re-block cooldown** (default 24 hours, a setting) passes; that is separate from block expiry (default 14 days).
 
 ### Block action
 
@@ -426,8 +428,9 @@ The plugin creates things in your Cloudflare account and in Zoraxy that it **doe
 
 Every release has a `SHA256SUMS` file; check it as shown in [Setup](#setup). You can also rebuild a release yourself and compare, because the builds
 are reproducible: with the Go 1.24 toolchain, `git checkout vX.Y.Z && ./build.sh release` produced binaries byte-for-byte identical to the published
-`cloudflarewaf_linux_*` files for v0.3.1 and v0.3.2 on all four architectures (checked 21 October 2026). v0.3.0 predates the release build recipe and will
-not match.
+`cloudflarewaf_linux_*` files for v0.3.1 and v0.3.2 on all four architectures (checked 21 October 2026). v0.3.3 and v0.3.4 were each built twice from clean checkouts
+of the release commit before publishing, with identical results, and the published files are that build (the commit is embedded in each binary: `go version -m <binary>`).
+v0.3.0 predates the release build recipe and will not match.
 
 ## Security and privacy
 
@@ -450,8 +453,8 @@ not match.
   Several zones behind one Zoraxy are not supported yet (asked for in [issue #5](https://github.com/Braedach/zoraxy-cloudflare-waf/issues/5)).
   **Workaround that works today:** because the IP list is account-wide, add the one-line custom rule `ip.src in $<your_list_name>` by hand in every other zone
   of the same account, with the action you prefer (Managed Challenge or Block). The plugin keeps the list current and never edits a rule it did not create,
-  so the two do not interfere. Native multi-zone support is under consideration and waiting on answers in the issue (same account? same action in every zone?).
-  Zones in a different Cloudflare account cannot share the list and would need their own instance.
+  so the two do not interfere. The issue's reporter confirmed the workaround works well; native multi-zone and multi-account support is a possible future enhancement
+  (design and any test build are discussed in the issue). Zones in a *different* Cloudflare account cannot share the list, so the workaround does not cover them.
 - **No manual "unblock this IP" button.** Remove the address from the Cloudflare list and from the Zoraxy access rules by hand (see [Troubleshooting](#troubleshooting)).
 - **The Recent actions table shows the last 200 actions.** From v0.3.3 it is restored from `zoraxy_actions.jsonl` after a restart (on v0.3.2 and earlier it was in memory only and a restart emptied it). The journal remains the other durable record.
 - **Detection is deliberately narrow** (see [How it works](#how-it-works)): a few path families, exploit patterns and error bursts. It is a reflex against scanners, not a full WAF.
@@ -459,15 +462,19 @@ not match.
 
 ## Status
 
-**v0.3.4 — working in production** (v0.3.4 corrects the settings-page help text only; the persistent action history, new in v0.3.3, was deployed on 21 October 2026; the results below are from v0.3.0 to v0.3.2 unless stated). Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
+**v0.3.4 — working in production** (v0.3.4, 26 October 2026, corrects the settings-page help text only; the persistent action history, new in v0.3.3, was deployed on 21 October 2026; the results below are from v0.3.0 to v0.3.3 unless stated). Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
 2026-09-21, the Zoraxy-blacklist layer since 2026-09-22.
 
-- *Production results to 21 October 2026 (v0.3.0 to v0.3.2):* in October the plugin banned **94 distinct scanner addresses**, about 40 of them in Google Cloud
-  ranges, from 97 ban actions: 81 by a sensitive-path probe, 10 by an error burst, 5 relayed from Zoraxy's own blacklist and 1 by an exploit pattern; from the triggering request to the ban the median was 3 seconds (1 to 4 seconds for the sensitive-path detector, which does most of the work; error bursts take about 30 seconds by design, because they must wait for the evidence), and while an address was banned every request that reached Zoraxy was refused by its blacklist. On 21 October the Cloudflare list, the plugin's ban record and the blacklists of both selected
-  Zoraxy rules all held the same 62 addresses, no private or loopback address was on the list, and the journal showed no errors, with the 30-minute heartbeat and
-  hourly expiry lines throughout. Expiry has been removing aged bans from both layers (77 expiry actions since the first on 6 October) without error. The v0.3.1 and
-  v0.3.2 release binaries rebuild byte-for-byte identical from their tags (see [Verifying a release](#verifying-a-release)).
-- *Latest soak — 12.7 hours with both layers live:* **15 blocks, every one a genuine scanner** (`.DS_Store` and `/.git/config`
+- *Production results to 26 October 2026 (v0.3.0 to v0.3.3, Zoraxy 3.3.5 release candidates 2 to 4):* in October to the 25th the plugin banned **107 distinct scanner addresses**
+  (47 in Google ranges, 38 on DigitalOcean) from 111 ban actions: 94 by a sensitive-path probe, 10 by an error burst, 6 relayed from Zoraxy's own blacklist and 1 by an exploit
+  pattern. From the triggering request to the ban the median was 2 seconds (1 to 6 seconds for the sensitive-path detector, which does most of the work; error bursts take about 30 seconds
+  by design, because they must wait for the evidence). **While an address was banned, 603 of its requests reached Zoraxy and every one was refused by its blacklist; none reached an application.**
+  Three addresses came back after the 14-day expiry and were banned again. A check of every outside address that asked for a sensitive path since 22 October found none that was not banned.
+  On 26 October the Cloudflare list, the plugin's ban record and the blacklists of both selected Zoraxy rules all held the same 53 addresses, no private or loopback address was on the
+  list, and the journal showed no errors, with the 30-minute heartbeat and hourly expiry lines throughout. Expiry has been removing aged bans from both layers (92 expiry actions since the
+  first on 6 October) without error, and the persistent action history restored its entries after Zoraxy's self-update to 3.3.5-rc4. The v0.3.1 and v0.3.2 release binaries rebuild
+  byte-for-byte identical from their tags (see [Verifying a release](#verifying-a-release)).
+- *Earlier soak — 12.7 hours with both layers live (v0.3.1):* **15 blocks, every one a genuine scanner** (`.DS_Store` and `/.git/config`
   sweeps, Laravel `/.ENV` probes, `/.claude`/`/.codex` credential hunts, and two Metabase CVE probes that arrived through
   Zoraxy's own `blacklistedIpBlocked` event). **No false positives and no misses** — no public IP that hit a detection rule went
   unblocked. No errors, ~11 MB RSS, ~0 CPU. The three records agreed exactly: 15 tracked bans, 15 IPs in each of the two selected
@@ -484,7 +491,7 @@ not match.
   read treated as "no rules"; and a non-existent `PATCH …/items` call — items are added with `POST …/items`). The first live
   attempt then hit the account's **list quota** (Cloudflare error 10019) and stopped safely without writing anything else; that
   error is now explained in plain words, and Test Connection shows the account's lists up front.
-- *Tests:* **71 tests in 5 packages, all passing, race detector clean, `gofmt` and `go vet` clean** (v0.3.3, 21 October 2026; v0.3.2 had 63). The Cloudflare and
+- *Tests:* **71 tests in 5 packages, all passing, race detector clean, `gofmt` and `go vet` clean** (v0.3.4, 26 October 2026; v0.3.3 also had 71; v0.3.2 had 63). The Cloudflare and
   Zoraxy clients are tested against fake servers that record every request — including that a failed read never leads to a write, that other rules are
   never resent, and that expiry only removes entries this plugin created. No network is needed. What each test proves is in [docs/TESTING.md](docs/TESTING.md).
 

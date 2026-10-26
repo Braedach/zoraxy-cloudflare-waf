@@ -29,8 +29,19 @@ do not want public. Never paste `cloudflarewaf.json`. Security problems go throu
 ## Releases (maintainer)
 
 Version in `main.go` and `.introspect`, a `CHANGELOG.md` entry that states why, then tag, `./build.sh release`, and publish the four binaries plus
-`SHA256SUMS`. Builds are reproducible with Go 1.24; verify that a rebuild of the tag matches before publishing. Tags and published files are never moved or
-replaced.
+`SHA256SUMS`. Builds are reproducible with Go 1.24: build the release commit twice from clean checkouts and confirm the binaries match before publishing; `build.sh` embeds the
+commit, so build from the exact commit you tag (the merged commit on `main`). Tags and published files are never moved or replaced.
+
+### Release candidates
+
+A change that must be tested by people other than the maintainer ships as a **release candidate** first, so that it cannot reach ordinary users, the plugin store or the author's own
+production proxy before it is proven:
+
+- It lives on a feature branch and is **not merged to `main`** until testing is complete. `main`, `latest` and the README's download links stay on the last stable release.
+- It is tagged `vX.Y.Z-rcN` on the branch commit and published as a GitHub **pre-release** (never "latest", so the store indexer and `releases/latest/download` do not serve it),
+  with asset names that cannot match the store's pattern (for example `cloudflarewaf-rc1_linux_amd64`) and `SHA256SUMS`.
+- The build shows a visible release-candidate banner and its version string, and the release notes say what to test and what to report (journal lines with tokens and IDs removed).
+- The maintainer tests it on a throwaway Zoraxy, never on the production proxy. Only after testing passes is the branch merged and a stable release tagged.
 
 ## Conduct
 
