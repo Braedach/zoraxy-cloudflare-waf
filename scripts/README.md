@@ -5,7 +5,7 @@ refused. It is the **reporting** half of the setup: the plugin in this repositor
 what the proxy saw. Read-only: it never changes Zoraxy, the plugin or Cloudflare, and never reads the plugin's configuration file
 (which holds an API token).
 
-Version 2.10.0. MIT licence, like the rest of the repository.
+Version 2.11.0. MIT licence, like the rest of the repository.
 
 ## What the report contains
 
@@ -20,9 +20,12 @@ Version 2.10.0. MIT licence, like the rest of the repository.
 | Blocked clients | One row per refused client with its counts per layer, main target, first and last time. A 170-request scanner burst is one row, not 170 lines. |
 | Exploit and probe attempts | The first and last 30 matching lines; the log has the rest. |
 
-The script also writes `platform-status-<timestamp>.txt` for **you only**: TLS certificate expiry and the last week of renewal results,
-Zoraxy restarts, the WAF plugin's health (process, version, bans this month by source, expiry actions, errors, last heartbeat) and any
-gaps in the uptime checker. It is a separate file on purpose, so the report can be shared without it.
+The script also writes `platform-status-<timestamp>.txt` for **you only**: TLS certificate expiry, when each certificate was last renewed and the
+last 30 days' successful renewals (with the last week's failures), Zoraxy restarts, the WAF plugin's health (process and binary hash, version, ban record,
+bans this month by source and detector, expiry actions, errors, last heartbeat), gaps in the uptime checker (a long gap is printed as one range), and the
+**monitored-target outages**: each period this month in which Zoraxy's uptime monitor saw a proxied target offline for ten minutes or more, with when it
+went offline, when it came back and for how long. The outage list explains the checker gaps: the checker goes silent while monitored hosts are offline,
+so a silent checker does not mean Zoraxy was down. It is a separate file on purpose, so the report can be shared without it.
 
 ## Install
 
@@ -54,6 +57,7 @@ Everything is an optional environment variable. Nothing is hard-coded to one sit
 | `IGNORE_UA_REGEX` | empty | User agents to count but not list (a regex), for a noisy application, for example `^Jellyfin\|^Plex` |
 | `UPTIME_PER_DAY` | `576` | Uptime checks you expect per day, for the platform-status gap check |
 | `PLUGIN_DIR` | `$ZORAXY_DIR/plugins/com.braedach.zoraxy.cloudflarewaf` | The plugin's folder |
+| `OFFLINE_MIN_MINUTES` | `10` | Shortest target outage listed in the platform status's outage section |
 
 ## Reading it correctly
 

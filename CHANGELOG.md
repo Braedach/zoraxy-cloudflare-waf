@@ -5,6 +5,7 @@ Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's 
 ## Unreleased
 - Docs only: the `logtail: alive` heartbeat is every 30 minutes (README and TESTING.md said hourly); Known limits now document the multi-zone
   workaround and the stale settings-page sentence about the in-memory history. No code change.
+- `scripts/forensic-report.sh` v2.11.0: platform status gains per-certificate last-renewed dates and the last 30 days' renewals, a "Monitored-target outages" section from Zoraxy's uptime monitor, and uptime-checker gaps printed as ranges; fixes a stray "Broken pipe" line that could end the Exploit / Probe section. The forensic report is otherwise unchanged. No plugin code change.
 - Added `scripts/forensic-report.sh` (v2.10.0, sanitised public edition of the weekly report script) with its README, `docs/forensic/` (the public six-month analysis, rev 1.7, and REPORT-GUIDE.md) and an "At a glance" section in the README.
 - Public analysis expanded (about 4,500 words): banned-address origins, measured ban latency by detector, path families, two burst timelines, daily ban waves and an FAQ. README now states the measured latency (median 3 s from the triggering request) instead of "one to two seconds".
 - Planned: correct the settings-page text; multi-zone support (issue #5), pending the reporter's answers.

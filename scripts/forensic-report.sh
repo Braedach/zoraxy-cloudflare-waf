@@ -2,7 +2,7 @@
 
 ################################################################################
 # Zoraxy Forensic Report Generator (public edition)
-# Version: 2.10.0
+# Version: 2.11.0
 #
 # Part of https://github.com/Braedach/zoraxy-cloudflare-waf  (scripts/forensic-report.sh)
 # MIT licence, like the rest of the repository.
@@ -12,7 +12,8 @@
 #   hitting the proxy, which requests were refused and by which layer, error and authentication
 #   failure sources, probe paths, user agents and alternate-port sweeps. It can also mail the report.
 #   A second file, platform-status-<timestamp>.txt, is written for the operator only (certificate
-#   expiry, renewal results, Zoraxy restarts, the WAF plugin's health, uptime-checker gaps).
+#   expiry and renewal dates, Zoraxy restarts, the WAF plugin's health, uptime-checker gaps, and the
+#   periods in which Zoraxy's uptime monitor saw a proxied target offline).
 #
 # Read-only: it never changes Zoraxy, the plugin or Cloudflare, and never reads the plugin's
 # configuration file (that holds an API token).
@@ -30,6 +31,7 @@
 #   LAN_V4_REGEX      which client addresses count as LAN           default ^192\.168\.
 #   IGNORE_UA_REGEX   user agents to count but not list (a regex, e.g. '^Jellyfin|^Plex'); default none
 #   UPTIME_PER_DAY    uptime checks you expect per day              default 576 (checker every 150 s)
+#   OFFLINE_MIN_MINUTES  shortest target outage to list             default 10
 #   PLUGIN_DIR        the WAF plugin's folder (for platform status) default $ZORAXY_DIR/plugins/com.braedach.zoraxy.cloudflarewaf
 #
 # Install
@@ -44,6 +46,10 @@
 # hosts they asked for. Share the forensic report only after review; never share platform-status.
 #
 # Version history (short; the full history is in the repository's git log)
+#   2.11.0  platform status: certificates show when each was last renewed and the last 30 days' successful renewals;
+#           new "Monitored-target outages" section (when each target went offline, came back, and for how long; it
+#           explains uptime-checker silences); uptime-checker gaps printed as ranges. Fixed a stray "Broken pipe"
+#           line that could end the Exploit / Probe section. The forensic report itself is unchanged.
 #   2.10.0  "Blocked Clients" table (one row per refused client, by layer); raw exploit section capped to the
 #           first and last 30 lines; whitelist section shows counts per origin; version read from this header;
 #           optional ignore-list for noisy application user agents; platform-status second file.
@@ -64,6 +70,7 @@ SENDMAIL="${SENDMAIL:-/usr/sbin/sendmail}"
 LAN_V4_REGEX="${LAN_V4_REGEX:-^192\.168\.}"
 IGNORE_UA_REGEX="${IGNORE_UA_REGEX:-}"
 UPTIME_PER_DAY="${UPTIME_PER_DAY:-576}"
+OFFLINE_MIN_MINUTES="${OFFLINE_MIN_MINUTES:-10}"
 PLUGIN_DIR="${PLUGIN_DIR:-$ZORAXY_DIR/plugins/com.braedach.zoraxy.cloudflarewaf}"
 
 REPORT_TIMESTAMP="$(date '+%Y-%m-%d_%H-%M-%S')"
@@ -352,7 +359,7 @@ generate_report() {
         printf '%s\n' "$EXPL"
     else
         echo "  $EXPL_N matching lines; showing the first 30 and the last 30 (the rest are in the Zoraxy log)"
-        printf '%s\n' "$EXPL" | head -30
+        printf '%s\n' "$EXPL" 2>/dev/null | head -30
         echo "  ... $((EXPL_N - 60)) lines omitted ..."
         printf '%s\n' "$EXPL" | tail -30
     fi
@@ -437,15 +444,16 @@ generate_platform_status() {
     echo "-----------------------------------------------"
     echo " TLS certificates (Zoraxy)"
     echo "-----------------------------------------------"
-    printf '  %-34s %-26s %s\n' "certificate" "expires" "days left"
-    local f subj end secs days now; now=$(date +%s)
+    printf '  %-34s %-26s %-10s %s\n' "certificate" "expires" "days left" "file last changed (renewal time)"
+    local f subj end secs days now chg; now=$(date +%s)
     for f in $ZORAXY_DIR/conf/certs/*.pem; do
         [ -f "$f" ] || continue
         subj=$(openssl x509 -noout -subject -in "$f" 2>/dev/null | sed 's/.*CN *= *//')
         end=$(openssl x509 -noout -enddate -in "$f" 2>/dev/null | cut -d= -f2)
         [ -n "$end" ] || continue
         secs=$(date -d "$end" +%s 2>/dev/null || echo 0); days=$(( (secs - now) / 86400 ))
-        printf '  %-34s %-26s %s\n' "$subj" "$end" "$days"
+        chg=$(date -r "$f" '+%Y-%m-%d %H:%M' 2>/dev/null || echo unknown)
+        printf '  %-34s %-26s %-10s %s\n' "$subj" "$end" "$days" "$chg"
     done
     if [ "$HAVE_J" -eq 1 ]; then
         echo "Renewal results, last 7 days (journal [cert-renew]):"
@@ -454,6 +462,9 @@ generate_platform_status() {
         grep -oE 'Renew _\.[^ ]+\.pem\([^)]*\) failed: .*' /tmp/.fr-cert.$$ | sed -E 's/Renew _\.([^ ]+)\.pem\([^)]*\) failed: (.*)/\1|\2/' | awk -F'|' '{n[$1]++; m[$1]=substr($2,1,150)} END {for (k in n) printf "  FAILED:    %s (%d attempts) last error: %s\n", k, n[k], m[k]}'
         if ! grep -qE 'Successfully renewed|failed:' /tmp/.fr-cert.$$; then echo "  no renewal attempts in the last 7 days"; fi
         rm -f /tmp/.fr-cert.$$
+        echo "Successful renewals, last 30 days (journal [cert-renew]; date and time, certificate):"
+        journalctl -u zoraxy --since "-30 days" -o short-iso --no-pager 2>/dev/null | grep '\[cert-renew\]' | grep 'Successfully renewed' \
+            | sed -nE 's/^([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2}:[0-9]{2}).*Successfully renewed _\.(.*)\.pem.*/  \1 \2  \3/p' | sort | tail -12 | grep . || echo "  none"
     fi
     echo
 
@@ -483,6 +494,7 @@ generate_platform_status() {
     # A short day or an empty hour means Zoraxy or its host was down, or the checker stalled.
     # Today is skipped in the per-day check (it is still in progress); partial first and last hours are skipped in the hour check.
     awk -v today="$(date +%F)" -v perday="$UPTIME_PER_DAY" '
+        function dfc(y, m, d,   a, yy, mm) { a = int((14 - m) / 12); yy = y + 4800 - a; mm = m + 12 * a - 3; return d + int((153 * mm + 2) / 5) + 365 * yy + int(yy / 4) - int(yy / 100) + int(yy / 400) - 32045 }
         { if (match($0, /\[20[0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]/)) { dh = substr($0, RSTART + 1, 13); d = substr(dh, 1, 10); h = substr(dh, 12, 2) + 0
             all[d " " h] = 1; if (index($0, "useragent: zoraxy-uptime")) { cd[d]++; ch[d " " h]++ } } }
         END { nd = 0; for (k in all) { split(k, p, " "); if (!(p[1] in daysSeen)) { daysSeen[p[1]] = 1; days[++nd] = p[1] } }
@@ -491,10 +503,49 @@ generate_platform_status() {
               for (h = 23; h >= 0; h--) if ((days[nd] " " h) in all) { lastH = h; break }
               short = 0; for (i = 1; i <= nd; i++) if (days[i] != today && cd[days[i]] < perday - 6) { printf "  day %s: %d checks\n", days[i], cd[days[i]]; short++ }
               if (short == 0) printf "  every day complete (%d or more checks)\n", perday - 6
-              gaps = 0
+              gaps = 0; nr = 0; prev = -99
               for (i = 1; i <= nd; i++) for (h = 0; h < 24; h++) { k = days[i] " " h
-                  if ((k in all) && ch[k] < perday / 24 - 4 && !(i == nd && h == lastH) && !(i == 1 && h == firstH)) { printf "  hour %s %02d:00 has %d checks\n", days[i], h, ch[k]; gaps++ } }
+                  if ((k in all) && ch[k] < perday / 24 - 4 && !(i == nd && h == lastH) && !(i == 1 && h == firstH)) {
+                      o = dfc(substr(days[i], 1, 4) + 0, substr(days[i], 6, 2) + 0, substr(days[i], 9, 2) + 0) * 24 + h
+                      if (o == prev + 1) { rl[nr]++; rt[nr] += ch[k]; re[nr] = sprintf("%s %02d:00", days[i], h) }
+                      else { nr++; rl[nr] = 1; rt[nr] = ch[k]; rs[nr] = sprintf("%s %02d:00", days[i], h); re[nr] = rs[nr] }
+                      prev = o; gaps++ } }
+              for (r = 1; r <= nr; r++) { if (rl[r] == 1) printf "  hour %s has %d checks\n", rs[r], rt[r]
+                  else printf "  %s to %s (%d hours): %d checks (%d an hour expected)\n", rs[r], re[r], rl[r], rt[r], perday / 24 }
               if (gaps == 0) print "  no hour with fewer than " perday / 24 - 4 " checks" }' "$FILTERED" 2>/dev/null | head -40
+    echo
+    echo "-----------------------------------------------"
+    echo " Monitored-target outages since $MONTH_START (offline ${OFFLINE_MIN_MINUTES} minutes or more)"
+    echo "-----------------------------------------------"
+    # Zoraxy's uptime monitor logs "went offline" and "is back online" per target. It repeats "went offline" after every Zoraxy restart, so only the
+    # first one of a run counts. A silent uptime checker (above) coincides with monitored targets being offline; it does not mean Zoraxy was down.
+    if [ "$HAVE_J" -eq 1 ]; then
+        journalctl -u zoraxy --since "$MONTH_START" -o short-iso --no-pager 2>/dev/null | grep '\[uptime-monitor\]' | grep -E 'went offline|is back online' > /tmp/.fr-mon.$$ 2>/dev/null
+        if [ -s /tmp/.fr-mon.$$ ]; then
+            printf '  %-46s %-17s %-17s %s\n' "target" "offline since" "back online" "duration"
+            awk -v min="$OFFLINE_MIN_MINUTES" -v now="$(date '+%Y-%m-%dT%H:%M:%S')" '
+                function dfc(y, m, d,   a, yy, mm) { a = int((14 - m) / 12); yy = y + 4800 - a; mm = m + 12 * a - 3; return d + int((153 * mm + 2) / 5) + 365 * yy + int(yy / 4) - int(yy / 100) + int(yy / 400) - 32045 }
+                function ep(ts,   y, m, d, H, M, S) { y = substr(ts, 1, 4) + 0; m = substr(ts, 6, 2) + 0; d = substr(ts, 9, 2) + 0; H = substr(ts, 12, 2) + 0; M = substr(ts, 15, 2) + 0; S = substr(ts, 18, 2) + 0; return dfc(y, m, d) * 86400 + H * 3600 + M * 60 + S }
+                function fmt(sec,   d, h, m) { d = int(sec / 86400); h = int((sec % 86400) / 3600); m = int((sec % 3600) / 60); return (d > 0 ? d "d " : "") h "h " m "m" }
+                function show(t, s, e, open,   dur) { dur = ep(e) - ep(s); if (dur >= min * 60) printf "  %-46s %s  %-17s %s%s\n", t, substr(s, 1, 10) " " substr(s, 12, 5), (open ? "still offline" : substr(e, 1, 10) " " substr(e, 12, 5)), fmt(dur), (open ? " so far" : "") }
+                { ts = substr($1, 1, 19)
+                  if (!match($0, /Target [^ ]+ \(/)) next
+                  t = substr($0, RSTART + 7, RLENGTH - 9)
+                  if (index($0, "went offline")) { if (!(t in st)) st[t] = ts }
+                  else if (index($0, "is back online")) { if (t in st) { if (index(t, "/") == 0) show(t, st[t], ts, 0); delete st[t] } } }
+                END { for (t in st) { if (index(t, "/") > 0) pathopen++; else show(t, st[t], now, 1) }
+                      if (pathopen > 0) printf "  (plus %d path-based targets, for example forwards to external services, offline throughout; not listed)\n", pathopen }
+            ' /tmp/.fr-mon.$$ > /tmp/.fr-out.$$
+            grep -v '^  (plus' /tmp/.fr-out.$$ | sort -k1,1 -k2,3
+            grep '^  (plus' /tmp/.fr-out.$$
+            rm -f /tmp/.fr-out.$$
+        else
+            echo "  no monitor events since $MONTH_START"
+        fi
+        rm -f /tmp/.fr-mon.$$
+    else
+        echo "  journalctl is not available"
+    fi
     echo
     echo "-----------------------------------------------"
     echo " End of platform status"
