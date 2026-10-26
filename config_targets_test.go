@@ -99,7 +99,7 @@ func TestNormalise_AdditionalAccountsGetDefaultsAndLabels(t *testing.T) {
 		t.Fatal(err)
 	}
 	a, b := in.AdditionalTargets[0], in.AdditionalTargets[1]
-	if a.Label != "Account 2" || b.Label != "Account 3" || a.BlockAction != "block" || a.IPListName != defaultConfig().IPListName || a.MaxIPListItems != 10000 {
+	if a.Label != "Cloudflare Account 2" || b.Label != "Cloudflare Account 3" || a.BlockAction != "block" || a.IPListName != defaultConfig().IPListName || a.MaxIPListItems != 10000 {
 		t.Errorf("defaults: %+v / %+v", a, b)
 	}
 }
@@ -117,7 +117,7 @@ func TestNormalise_Rejects(t *testing.T) {
 		"a duplicate label": func(c *Config) {
 			c.AdditionalTargets = append(c.AdditionalTargets, TargetConfig{Label: "second", AccountID: acctC, APIToken: "x", ZoneIDs: []string{zone3}})
 		},
-		"the reserved label primary": func(c *Config) { c.AdditionalTargets[0].Label = "Primary" },
+		"the reserved label of account 1": func(c *Config) { c.AdditionalTargets[0].Label = "cloudflare account 1" },
 		"a label that is too long":   func(c *Config) { c.AdditionalTargets[0].Label = strings.Repeat("x", 31) },
 		"a bad account id":           func(c *Config) { c.AdditionalTargets[0].AccountID = "not an id/../x" },
 		"a bad zone id":              func(c *Config) { c.AdditionalTargets[0].ZoneIDs = []string{"zone with spaces"} },
@@ -242,7 +242,7 @@ func TestCloudflareTargets_ExtraZonesAndAdditionalAccounts(t *testing.T) {
 	if len(ts) != 2 {
 		t.Fatalf("a disabled account must not become a target: %d", len(ts))
 	}
-	if ts[0].Label != "primary" || strings.Join(ts[0].Zones, ",") != zone1+","+zone2 {
+	if ts[0].Label != "Cloudflare Account 1" || strings.Join(ts[0].Zones, ",") != zone1+","+zone2 {
 		t.Errorf("primary: %+v", ts[0])
 	}
 	if ts[1].Label != "Second" || ts[1].BlockAction != "challenge" || ts[1].IPListName != "list_b" || ts[1].MaxListItems != 5 {
@@ -307,7 +307,7 @@ func TestNormalise_AnUnusedTabIsNotStored(t *testing.T) {
 	if err := normaliseTargets(&in2, baseCfg()); err != nil {
 		t.Fatal(err)
 	}
-	if len(in2.AdditionalTargets) != 2 || in2.AdditionalTargets[1].AccountID != acctC || in2.AdditionalTargets[1].Label != "Account 3" {
+	if len(in2.AdditionalTargets) != 2 || in2.AdditionalTargets[1].AccountID != acctC || in2.AdditionalTargets[1].Label != "Cloudflare Account 3" {
 		t.Errorf("tab positions must be kept: %+v", in2.AdditionalTargets)
 	}
 }

@@ -235,7 +235,7 @@ func (s *server) zone(w http.ResponseWriter, r *http.Request, body []byte, seg [
 	rs := s.rulesets[z]
 	const entry = "phases/http_request_firewall_custom/entrypoint"
 	switch {
-	case len(seg) == 5 && strings.Join(seg[3:], "/") == entry && r.Method == http.MethodGet:
+	case len(seg) == 6 && strings.Join(seg[3:], "/") == entry && r.Method == http.MethodGet:
 		if rs == nil {
 			reply(w, 404, nil, [2]any{10003, "no ruleset"})
 			return
@@ -247,7 +247,7 @@ func (s *server) zone(w http.ResponseWriter, r *http.Request, body []byte, seg [
 			out = append(out, map[string]string{"id": rs.ID, "phase": rs.Phase})
 		}
 		reply(w, 200, out)
-	case len(seg) == 5 && strings.Join(seg[3:], "/") == entry && r.Method == http.MethodPut:
+	case len(seg) == 6 && strings.Join(seg[3:], "/") == entry && r.Method == http.MethodPut:
 		var req struct{ Rules []rule }
 		_ = json.Unmarshal(body, &req)
 		rs = &ruleset{ID: s.id("RS"), Phase: "http_request_firewall_custom"}

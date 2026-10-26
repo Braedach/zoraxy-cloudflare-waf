@@ -108,7 +108,10 @@ type Config struct {
 }
 
 const (
-	maxAdditionalTargets = 2 // primary + two
+	maxAdditionalTargets = 2 // Cloudflare Account 1 + two
+
+	// primaryLabel names the first account wherever several are shown (tab, log lines); an extra account cannot reuse it.
+	primaryLabel = "Cloudflare Account 1"
 	maxZonesPerTarget    = 5 // the primary zone plus up to four more
 	maxLabelLength       = 30
 )
@@ -166,12 +169,12 @@ func normaliseTargets(in *Config, current Config) error {
 	if len(in.AdditionalTargets) > maxAdditionalTargets {
 		return fmt.Errorf("too many additional accounts (%d, max %d)", len(in.AdditionalTargets), maxAdditionalTargets)
 	}
-	labels := map[string]bool{"primary": true}
+	labels := map[string]bool{strings.ToLower(primaryLabel): true}
 	for i := range in.AdditionalTargets {
 		t := &in.AdditionalTargets[i]
 		t.Label = strings.TrimSpace(t.Label)
 		if t.Label == "" {
-			t.Label = fmt.Sprintf("Account %d", i+2)
+			t.Label = fmt.Sprintf("Cloudflare Account %d", i+2)
 		}
 		if len(t.Label) > maxLabelLength {
 			return fmt.Errorf("account %d: label is longer than %d characters", i+2, maxLabelLength)
@@ -242,7 +245,7 @@ func normaliseTargets(in *Config, current Config) error {
 
 // isBlank reports whether nothing the user typed is in this target (the defaults normaliseTargets fills in do not count).
 func (t TargetConfig) isBlank() bool {
-	return !t.Enabled && t.APIToken == "" && t.AccountID == "" && len(t.ZoneIDs) == 0 && strings.HasPrefix(t.Label, "Account ")
+	return !t.Enabled && t.APIToken == "" && t.AccountID == "" && len(t.ZoneIDs) == 0 && strings.HasPrefix(t.Label, "Cloudflare Account ")
 }
 
 // normaliseZoneIDs trims, validates and de-duplicates zone IDs, dropping any that equal skip (the primary zone).

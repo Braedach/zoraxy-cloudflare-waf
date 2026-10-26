@@ -534,7 +534,7 @@ func cloudflareTargets(cfgStore *configStore) []blocker.Target {
 	if c.Configured() {
 		label := ""
 		if len(extra) > 0 {
-			label = "primary"
+			label = primaryLabel
 		}
 		primaryZone := c.CloudflareZoneID
 		out = append(out, blocker.Target{
