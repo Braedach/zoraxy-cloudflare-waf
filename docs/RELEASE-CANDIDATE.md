@@ -79,7 +79,8 @@ No. This was tested (see below) and designed so that it cannot:
 2. Optional: restore the settings backup (`cp -p /root/cloudflarewaf.before-rc1.json "$PLUGIN_DIR/cloudflarewaf.json"`). It is not required to run the old version.
 3. What the RC left behind in **additional** accounts is not removed automatically: one IP list and one custom rule per zone, both named as you configured them (default list
    `zoraxy_cf_waf_blocklist`, rule `Zoraxy CF WAF Sync - managed IP blocklist`). Delete the rule first, then the list, in the Cloudflare dashboard if you do not want them.
-   Entries expire on their own only while an RC (or later) build is running.
+   Entries those accounts already hold are **not** expired once you are back on v0.3.x (older versions only manage Cloudflare Account 1), so remove them by hand as well,
+   or leave them: they only block the addresses they list.
 
 ## What was tested, and what was not
 
@@ -93,7 +94,8 @@ Not pulled out of a hat: the change was built in small steps with a test for eac
   with three accounts (four zones, one list each, rule slots, error codes): all accounts and zones blocked from one request; one account returning 403 (partial, then
   recovered on the next block); a foreign rule with our rule's name (left alone, other zones protected); an account already at its one-list limit (Cloudflare error 10019 reported by
   name); dry run (no calls made); 14-day expiry on every account's list; upgrade from a v0.3.4 settings and history file; and downgrade to v0.3.4 with the RC's settings file
-  (loads, file untouched).
+  (loads, file untouched); and the documented **rollback** to v0.3.4, both keeping the RC's settings file and restoring the pre-RC one (v0.3.4 started, read the history,
+  re-used the existing list and rule without duplicating them, and blocked new addresses; the extra accounts' leftovers stayed as described above).
 - **Not tested: real second and third Cloudflare accounts.** The simulated Cloudflare follows the same API calls the plugin already makes on a real account (verified daily on the
   maintainer's single account), but it is not Cloudflare. That is exactly why this candidate needs your feedback before it can become a release.
 - Known behaviour: if one account is down when an IP is blocked, that account does not get a retry for that IP until the re-block cooldown (default 24 hours) passes; the other accounts hold it meanwhile.

@@ -4,6 +4,7 @@
 #   ./build.sh                 # linux/amd64 only (default)
 #   ./build.sh release         # every architecture published in the GitHub releases
 #   ./build.sh arm64 386       # a specific list
+#   RC_LABEL=rc1 ./build.sh release   # release candidate: red banner in the UI, assets named cloudflarewaf-rc1_linux_<arch>
 #
 # Needs Go (see go.mod for the version). No cgo, so the binaries are static. Install: see "Setup" in README.md.
 set -euo pipefail
@@ -14,6 +15,13 @@ cd "$(dirname "$0")"
 RELEASE_ARCHES=(amd64 arm64 arm 386)
 PLUGIN_ID="com.braedach.zoraxy.cloudflarewaf"
 ASSET_BASE="${PLUGIN_ID##*.}"        # cloudflarewaf
+LDFLAGS="-s -w"
+if [[ -n "${RC_LABEL:-}" ]]; then
+    # A release candidate carries its label in the binary (the settings page shows a banner) and in the asset names,
+    # which cannot match the plugin store's cloudflarewaf_linux_<arch> pattern.
+    LDFLAGS="${LDFLAGS} -X main.buildLabel=${RC_LABEL}"
+    ASSET_BASE="${ASSET_BASE}-${RC_LABEL}"
+fi
 
 if ! command -v go >/dev/null 2>&1; then
     echo "error: Go is not installed or not on PATH (see go.mod for the required version)" >&2
@@ -34,7 +42,7 @@ mkdir -p build
 built=()
 for arch in "${arches[@]}"; do
     out="build/zoraxy-cloudflare-waf_${VERSION}_linux_${arch}"
-    GOOS=linux GOARCH="${arch}" CGO_ENABLED=0 GOARM=7 go build -trimpath -ldflags="-s -w" -o "${out}" .
+    GOOS=linux GOARCH="${arch}" CGO_ENABLED=0 GOARM=7 go build -trimpath -ldflags="${LDFLAGS}" -o "${out}" .
     built+=("${out}")
     echo "Built: ${out}"
 done
