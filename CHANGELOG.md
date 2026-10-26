@@ -7,6 +7,7 @@ Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's 
   workaround and the stale settings-page sentence about the in-memory history. No code change.
 - Added `scripts/forensic-report.sh` (v2.10.0, sanitised public edition of the weekly report script) with its README, `docs/forensic/` (the public six-month analysis, rev 1.7, and REPORT-GUIDE.md) and an "At a glance" section in the README.
 - Public analysis expanded (about 4,500 words): banned-address origins, measured ban latency by detector, path families, two burst timelines, daily ban waves and an FAQ. README now states the measured latency (median 3 s from the triggering request) instead of "one to two seconds".
+- Public analysis refreshed to 25 October 2026 (revision 1.8) and renamed to the monthly convention (`Zoraxy-Forensic-Network-Analysis-2026-October-PUBLIC.docx`): 107 banned addresses, re-measured ban latency (median 2 s; path probes 1 to 6 s), enforcement while banned (603 requests refused, none reached an application), a rotating-/24 actor and the steady sweeps since 21 October. Leak-checked.
 - Planned: correct the settings-page text; multi-zone support (issue #5), pending the reporter's answers.
 
 ## 0.3.3 — 2026-10-21
