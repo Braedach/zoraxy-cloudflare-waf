@@ -7,6 +7,7 @@ Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's 
   workaround and the stale settings-page sentence about the in-memory history. No code change.
 - Added `scripts/forensic-report.sh` (v2.10.0, sanitised public edition of the weekly report script) with its README, `docs/forensic/` (the public six-month analysis, rev 1.7, and REPORT-GUIDE.md) and an "At a glance" section in the README.
 - Public analysis expanded (about 4,500 words): banned-address origins, measured ban latency by detector, path families, two burst timelines, daily ban waves and an FAQ. README now states the measured latency (median 3 s from the triggering request) instead of "one to two seconds".
+- Compatibility: verified on Zoraxy 3.3.5-rc4 (25 October 2026): the plugin loaded, restored its history from disk (27 entries) and ran without errors after the self-update.
 - Planned: correct the settings-page text; multi-zone support (issue #5), pending the reporter's answers.
 
 ## 0.3.3 — 2026-10-21

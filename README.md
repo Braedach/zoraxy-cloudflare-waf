@@ -365,7 +365,7 @@ layer is on). There is no unblock button in the plugin yet. Detection is deliber
 
 ## Compatibility
 
-- **Zoraxy:** 3.3.4 or newer. Used in production on 3.3.4, 3.3.5 and the 3.3.5 release candidates 2 and 3 (linux/amd64), including
+- **Zoraxy:** 3.3.4 or newer. Used in production on 3.3.4, 3.3.5 and the 3.3.5 release candidates 2, 3 and 4 (linux/amd64), including
   across Zoraxy's own self-updates.
 - **Cloudflare:** any plan that has custom WAF rules and account IP lists. The Free plan works; its limits (five custom rules per zone,
   a small list quota) are described [above](#cloudflare-limits-and-how-this-plugin-manages-them).
