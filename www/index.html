@@ -67,39 +67,50 @@
 
   <h3>What it does</h3>
   <ul>
-    <li>Follows Zoraxy's access log (from the moment the plugin starts) and, if ticked, Zoraxy's own blacklist events.</li>
+    <li>Follows Zoraxy's access log (the current month's <code>zr_YYYY-M.log</code>, from the moment the plugin starts, moving to the next
+      month's file by itself) and, if ticked, Zoraxy's own blacklist events.</li>
     <li>A client IP becomes a block candidate when (1) a request looks like an exploit probe (path traversal, <code>/etc/passwd</code>,
-      actuator endpoints, etc.); (2) it asks for a file only scanners ask for — <code>/.git/…</code>, <code>/.env</code>,
-      <code>/.aws</code>/<code>/.docker</code>/<code>/.kube</code>/<code>/.ssh</code>, <code>.netrc</code>/<code>.npmrc</code>, credential
-      files, SSH keys — <em>whatever the response status</em> (single-page apps answer such paths with 200, so error counts alone miss
-      those scanners); or (3) it racks up more than the threshold of 4xx/5xx responses within the window (see <em>Detection thresholds</em>).</li>
-    <li>Private, loopback and Cloudflare's own addresses are never blocked. An IP already actioned is skipped until the
-      re-block cooldown passes.</li>
+      actuator endpoints and similar); (2) it asks for a file only scanners ask for, <em>whatever the response status</em> (single-page apps
+      answer such paths with 200, so error counts alone miss those scanners): version-control folders (<code>/.git</code>, <code>/.svn</code>,
+      <code>/.hg</code>), <code>/.env</code>, tool and cloud folders (<code>/.aws</code>, <code>/.docker</code>, <code>/.kube</code>,
+      <code>/.ssh</code>, <code>/.azure</code>, <code>/.gcloud</code>, <code>/.config</code>, <code>/.anthropic</code>, <code>/.vscode</code>,
+      <code>/.idea</code>), credential dotfiles (<code>.netrc</code>, <code>.npmrc</code>, <code>.pypirc</code>, <code>.htpasswd</code>,
+      <code>.htaccess</code>, <code>.bash_history</code>, <code>.DS_Store</code>), files named like credentials (<code>credentials.json</code>,
+      <code>client_secret…</code>, <code>service-account…</code>) and SSH keys (<code>id_rsa</code>, <code>id_ed25519</code>,
+      <code>id_ecdsa</code>); or (3) it makes more than the threshold of 4xx/5xx responses within the window (default 30 in 60 seconds; see
+      <em>Detection thresholds</em>). Matching is on the request path, ignoring case; <code>/.well-known/</code> never matches.</li>
+    <li>Private, loopback, link-local and Cloudflare's own addresses are never blocked. An IP already actioned is skipped until the
+      <em>re-block cooldown</em> passes (default 24 hours).</li>
     <li><strong>Two layers, independent:</strong> Cloudflare's edge (primary) and, optionally, Zoraxy's own blacklist. If one layer fails
-      and the other works the action shows as <em>partial</em>, and the failing layer's reason is in the Detail column.</li>
-    <li><strong>Blocks expire</strong> after the number of days you set (default 14); only entries this plugin created are removed.</li>
+      and the other works the action shows as <em>partial</em>, and the failing layer's reason is in the Detail column. With <em>Also ban
+      in Zoraxy</em> ticked the plugin can run without Cloudflare credentials (Zoraxy layer only).</li>
+    <li><strong>Blocks expire</strong> after the number of days you set (default 14; 0 keeps them forever), in both layers. The check runs
+      hourly while live, removes at most 200 entries a run, and only removes entries this plugin created.</li>
   </ul>
 
   <h3>Off, dry run, live</h3>
   <ul>
     <li><strong>Enabled off</strong> — nothing is acted on.</li>
-    <li><strong>Enabled + Dry run</strong> — decisions are recorded and logged but <strong>nothing is sent to Cloudflare</strong>.
-      This is the safe way to watch what it would do.</li>
+    <li><strong>Enabled + Dry run</strong> — decisions are recorded and logged, but <strong>nothing is sent to Cloudflare and nothing is
+      banned in Zoraxy</strong>. This is the safe way to watch what it would do.</li>
     <li><strong>Enabled, Dry run off (live)</strong> — the first real block creates the IP list and one WAF custom rule in
       Cloudflare (if they don't exist), then adds the IP to the list. <em>Until then Cloudflare shows nothing new — that's expected.</em></li>
   </ul>
 
   <h3>Where to see what it's doing</h3>
   <ul>
-    <li>The <em>Recent actions</em> table at the bottom of this page (kept in memory — it empties when Zoraxy or the plugin restarts).</li>
-    <li>The Zoraxy journal, which keeps history: <code>journalctl -u zoraxy -f | grep -F "Zoraxy Cloudflare WAF plugin"</code>.
-      A "logtail: alive" line appears every 30 minutes as a heartbeat.</li>
+    <li>The <em>Recent actions</em> table at the bottom of this page. It shows the last 200 actions and survives restarts: it is restored
+      from <code>zoraxy_actions.jsonl</code> next to the plugin binary (if it is empty after a restart, look for <code>history:</code>
+      lines in the journal).</li>
+    <li>The Zoraxy journal, which keeps the full history: <code>journalctl -u zoraxy -f | grep -F "Zoraxy Cloudflare WAF plugin"</code>.
+      A "logtail: alive" line appears every 30 minutes and an "expiry:" line every hour, so "running, nothing to do" can be told from
+      "not running".</li>
   </ul>
 
   <h3>Names — two different fields</h3>
   <ul>
-    <li><strong>IP list name</strong> is a machine name Cloudflare uses inside the rule expression: letters, digits and underscores only,
-      no spaces.</li>
+    <li><strong>IP list name</strong> is the machine name Cloudflare uses inside the rule expression: letters, digits and underscores only,
+      no spaces, up to 50 characters (default <code>zoraxy_cf_waf_blocklist</code>).</li>
     <li><strong>WAF rule name</strong> is just the label in Cloudflare's Security Rules list — spaces and capitals are fine.
       <strong>Use a name none of your own rules has.</strong> The plugin only ever edits the rule it created. If one of your rules already
       has exactly this name, it is left untouched, the plugin's rule is not created, and blocks are reported as errors (Test Connection
@@ -112,7 +123,14 @@
     <li>A changed <em>Block action</em> reaches Cloudflare at the next real block, not when you save.</li>
     <li>Cloudflare limits how many <em>lists</em> an account can have (Free plans very few — a separate limit from the 5 custom
       <em>rules</em>). If it is used up, the first block fails with "maximum number of lists"; <em>Test Connection</em> shows your lists
-      and warns. Free one, or point <em>IP list name</em> at an existing IP list that is only a block list.</li>
+      and warns. Free one, or point <em>IP list name</em> at an existing IP list that is only a block list. <strong>Never reuse an allow
+      list</strong>: blocked IPs added to it would be let through.</li>
+    <li>Zoraxy-side bans only block if the access rule's blacklist is switched on <strong>and</strong> Zoraxy sees the visitor's real address
+      (behind a tunnel, add the tunnel's addresses to Zoraxy's trusted proxies and turn on "Trust proxy headers only"). Otherwise the ban is
+      accepted and silently does nothing.</li>
+    <li>One Cloudflare account and one zone per plugin instance. For more zones in the same account, add the rule
+      <code>ip.src in $&lt;your list name&gt;</code> by hand in each; the plugin keeps the list current.</li>
+    <li>There is no "unblock this IP" button: remove the address from the Cloudflare list and from the Zoraxy access rules by hand.</li>
     <li>Changes to the log directory or detection thresholds need the plugin to be restarted.</li>
   </ul>
 </details>

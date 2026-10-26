@@ -10,8 +10,8 @@ blocks expire automatically.
 
 - **What it is:** a Zoraxy plugin that turns scanner behaviour in Zoraxy's own access log into automatic bans at Cloudflare's edge, with an optional second layer in Zoraxy's blacklist. Bans expire; it ships in dry-run.
 - **Who it is for:** anyone publishing services through Zoraxy and Cloudflare (the Free plan is enough) who wants scanners stopped in seconds without hand-copying addresses.
-- **Status:** v0.3.3, running in production since 21 September 2026, 71 tests, reproducible release builds. In October to the 21st it banned 94 distinct addresses.
-- **New in v0.3.3:** the Recent actions table now survives restarts (`zoraxy_actions.jsonl`). Docs: the multi-zone workaround, the 30-minute heartbeat and a weekly report script.
+- **Status:** v0.3.4, running in production since 21 September 2026, 71 tests, reproducible release builds. In October to the 25th it banned 107 distinct addresses.
+- **New in v0.3.4:** the settings page's "How this works" text is corrected and completed (dry run covers both layers, the cooldown, Zoraxy-only mode, the full list of scanner paths, history now survives restarts). Since v0.3.3 the Recent actions table survives restarts (`zoraxy_actions.jsonl`). Docs: the multi-zone workaround, the 30-minute heartbeat and a weekly report script.
 - **Also in this repository:** [`scripts/forensic-report.sh`](scripts/README.md), a read-only weekly report of what reached your proxy and what was refused; [a public analysis of six months of real scanner traffic](docs/forensic/README.md); [a guide to reading that report, including when an AI writes the analysis](docs/forensic/REPORT-GUIDE.md).
 - **The story and the reasoning:** [Zoraxy: Reverse Proxy](https://www.braedach.com/zoraxy-reverse-proxy-2/) on the author's blog.
 
@@ -206,7 +206,7 @@ the list quota, if the list you named is not an IP list, or if it is used by rul
 Test Connection checks whatever is currently typed in the boxes and does **not** save it —
 click **Save** afterwards. **The `Enabled` toggle stays locked until credentials are in place** (saved, or
 a Test Connection has just succeeded), and the server refuses to save `enabled: true` unless the token,
-account ID and zone ID are all set — so it can't be switched on unconfigured.
+account ID and zone ID are all set, or **Also ban in Zoraxy** is ticked (Zoraxy-layer-only mode) — so it can't be switched on unconfigured.
 
 **Defaults are deliberately inert**: `enabled: false` and `dry_run: true` out of the box.
 - **Enabled off** — nothing is acted on.
@@ -452,8 +452,6 @@ not match.
   of the same account, with the action you prefer (Managed Challenge or Block). The plugin keeps the list current and never edits a rule it did not create,
   so the two do not interfere. Native multi-zone support is under consideration and waiting on answers in the issue (same account? same action in every zone?).
   Zones in a different Cloudflare account cannot share the list and would need their own instance.
-- **One sentence on the settings page is out of date for v0.3.3.** The "How this works" text says the Recent actions table is kept in memory and empties
-  on restart; since v0.3.3 it is restored from `zoraxy_actions.jsonl` (see below). The page text will be corrected in the next release.
 - **No manual "unblock this IP" button.** Remove the address from the Cloudflare list and from the Zoraxy access rules by hand (see [Troubleshooting](#troubleshooting)).
 - **The Recent actions table shows the last 200 actions.** From v0.3.3 it is restored from `zoraxy_actions.jsonl` after a restart (on v0.3.2 and earlier it was in memory only and a restart emptied it). The journal remains the other durable record.
 - **Detection is deliberately narrow** (see [How it works](#how-it-works)): a few path families, exploit patterns and error bursts. It is a reflex against scanners, not a full WAF.
@@ -461,7 +459,7 @@ not match.
 
 ## Status
 
-**v0.3.3 — working in production** (the persistent action history, new in v0.3.3, was deployed on 21 October 2026; the results below are from v0.3.0 to v0.3.2 unless stated). Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
+**v0.3.4 — working in production** (v0.3.4 corrects the settings-page help text only; the persistent action history, new in v0.3.3, was deployed on 21 October 2026; the results below are from v0.3.0 to v0.3.2 unless stated). Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
 2026-09-21, the Zoraxy-blacklist layer since 2026-09-22.
 
 - *Production results to 21 October 2026 (v0.3.0 to v0.3.2):* in October the plugin banned **94 distinct scanner addresses**, about 40 of them in Google Cloud

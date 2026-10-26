@@ -2,7 +2,10 @@
 
 Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's plugin list).
 
-## Unreleased
+## 0.3.4 — 2026-10-26
+**Why this release:** the "How this works" help on the settings page had drifted from the code (it still said the Recent actions table empties on restart, described dry run as Cloudflare-only, and listed only some of the scanner paths). Page text and docs only; **no change to detection, bans, expiry or the Cloudflare/Zoraxy calls.**
+- Settings page help corrected: history survives restarts (last 200 actions, `zoraxy_actions.jsonl`); dry run stops both layers; the re-block cooldown (default 24 h) is named and kept apart from expiry (default 14 days); Zoraxy-only mode; the full list of paths that count as a scanner probe; what is never blocked; hourly expiry (200 a run); list-name limit and defaults; never reuse an allow list; what a Zoraxy-side ban needs to work; one account and zone per instance (with the workaround); no unblock button.
+- README: the enable-gate paragraph now states that Zoraxy-only mode can be enabled without Cloudflare credentials; Status and At a glance updated; the stale known limit removed.
 - Docs only: the `logtail: alive` heartbeat is every 30 minutes (README and TESTING.md said hourly); Known limits now document the multi-zone
   workaround and the stale settings-page sentence about the in-memory history. No code change.
 - `scripts/forensic-report.sh` v2.11.0: platform status gains per-certificate last-renewed dates and the last 30 days' renewals, a "Monitored-target outages" section from Zoraxy's uptime monitor, and uptime-checker gaps printed as ranges; fixes a stray "Broken pipe" line that could end the Exploit / Probe section. The forensic report is otherwise unchanged. No plugin code change.
@@ -10,7 +13,7 @@ Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's 
 - Public analysis expanded (about 4,500 words): banned-address origins, measured ban latency by detector, path families, two burst timelines, daily ban waves and an FAQ. README now states the measured latency (median 3 s from the triggering request) instead of "one to two seconds".
 - Public analysis refreshed to 25 October 2026 (revision 1.8) and renamed to the monthly convention (`Zoraxy-Forensic-Network-Analysis-2026-October-PUBLIC.docx`): 107 banned addresses, re-measured ban latency (median 2 s; path probes 1 to 6 s), enforcement while banned (603 requests refused, none reached an application), a rotating-/24 actor and the steady sweeps since 21 October. Leak-checked.
 - Compatibility: verified on Zoraxy 3.3.5-rc4 (25 October 2026): the plugin loaded, restored its history from disk (27 entries) and ran without errors after the self-update.
-- Planned: correct the settings-page text; multi-zone support (issue #5), pending the reporter's answers.
+- Planned: multi-zone support (issue #5): see the issue for the design and the reporter's reply.
 
 ## 0.3.3 — 2026-10-21
 **Why this release:** the Recent actions table was in memory, so every Zoraxy restart emptied it, and Zoraxy restarts weekly when it self-updates. Operators
