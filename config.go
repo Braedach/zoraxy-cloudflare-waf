@@ -230,7 +230,19 @@ func normaliseTargets(in *Config, current Config) error {
 			return fmt.Errorf("cannot enable account %d (%s): its token, account ID and at least one zone ID must all be set first", i+2, t.Label)
 		}
 	}
+	// A tab the user never filled in is not stored, so a single-account config stays exactly what it always was on disk.
+	for n := len(in.AdditionalTargets); n > 0 && in.AdditionalTargets[n-1].isBlank(); n-- {
+		in.AdditionalTargets = in.AdditionalTargets[:n-1]
+	}
+	if len(in.AdditionalTargets) == 0 {
+		in.AdditionalTargets = nil
+	}
 	return nil
+}
+
+// isBlank reports whether nothing the user typed is in this target (the defaults normaliseTargets fills in do not count).
+func (t TargetConfig) isBlank() bool {
+	return !t.Enabled && t.APIToken == "" && t.AccountID == "" && len(t.ZoneIDs) == 0 && strings.HasPrefix(t.Label, "Account ")
 }
 
 // normaliseZoneIDs trims, validates and de-duplicates zone IDs, dropping any that equal skip (the primary zone).

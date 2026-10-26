@@ -286,3 +286,28 @@ func TestRedactedConfig_NeverShowsAnyToken_AndNeverTouchesTheStoredCopy(t *testi
 		t.Error("redaction must work on a copy")
 	}
 }
+
+func TestNormalise_AnUnusedTabIsNotStored(t *testing.T) {
+	in := baseCfg()
+	in.AdditionalTargets = []TargetConfig{{}, {}}
+	if err := normaliseTargets(&in, baseCfg()); err != nil {
+		t.Fatal(err)
+	}
+	if in.AdditionalTargets != nil {
+		t.Errorf("two empty tabs must leave no trace in the config: %+v", in.AdditionalTargets)
+	}
+	raw, _ := json.Marshal(in)
+	if strings.Contains(string(raw), "additional_targets") {
+		t.Error("the key must not be written")
+	}
+
+	// a filled second tab keeps its position even when the first is empty
+	in2 := baseCfg()
+	in2.AdditionalTargets = []TargetConfig{{}, {AccountID: acctC, APIToken: "t", ZoneIDs: []string{zone3}}}
+	if err := normaliseTargets(&in2, baseCfg()); err != nil {
+		t.Fatal(err)
+	}
+	if len(in2.AdditionalTargets) != 2 || in2.AdditionalTargets[1].AccountID != acctC || in2.AdditionalTargets[1].Label != "Account 3" {
+		t.Errorf("tab positions must be kept: %+v", in2.AdditionalTargets)
+	}
+}
