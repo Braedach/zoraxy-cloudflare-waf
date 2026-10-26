@@ -1,7 +1,7 @@
 # Forensic analysis (public edition)
 
-[Zoraxy-Forensic-Network-Analysis-Oct2026-rev1.7-PUBLIC.docx](Zoraxy-Forensic-Network-Analysis-Oct2026-rev1.7-PUBLIC.docx) is a
-six-month review of what a small home-lab reverse proxy sees when it is published to the internet: April to 18 October 2026, behind
+[Zoraxy-Forensic-Network-Analysis-2026-October-PUBLIC.docx](Zoraxy-Forensic-Network-Analysis-2026-October-PUBLIC.docx) is a
+six-month review of what a small home-lab reverse proxy sees when it is published to the internet: April to 25 October 2026, behind
 Cloudflare's free plan, with this plugin enforcing in seconds. It was written to be useful to other administrators.
 
 ## What is in it
@@ -14,6 +14,7 @@ Cloudflare's free plan, with this plugin enforcing in seconds. It was written to
   rule), and the plugin's detection design.
 - Where the 94 banned addresses come from, how fast each detector's ban lands (measured, not estimated), what the scanners ask for
   (628 distinct paths in families), a second-by-second look at two bursts, and how bans arrive in waves.
+- A rotating-address actor (one /24 of automated fetching that per-address bans could not follow) and the steady path-probe sweeps since 21 October.
 - Lessons, a checklist to reproduce the set-up, and a short FAQ.
 
 ## What was left out, on purpose
@@ -28,4 +29,5 @@ indicators, because cloud addresses are reused.
 
 - [scripts/](../../scripts/) is the weekly report script that produced the figures.
 - [REPORT-GUIDE.md](REPORT-GUIDE.md) says how to read the report correctly, including when an AI writes the analysis.
+- This analysis is one file per month, revised in place (revision 1.8 of the October edition); the next month starts a new file.
 - The post that ties it together: <https://www.braedach.com/zoraxy-reverse-proxy-2/>.
