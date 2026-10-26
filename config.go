@@ -92,6 +92,177 @@ type Config struct {
 
 	// ZoraxyAccessRules lists the Zoraxy access-rule IDs bans are added to ("default" is Zoraxy's default rule).
 	ZoraxyAccessRules []string `json:"zoraxy_access_rules"`
+
+	// ExtraZoneIDs are more zones in the PRIMARY account that get the same managed rule (same token, same IP list, same action).
+	// Empty means the single-zone behaviour every earlier version had.
+	ExtraZoneIDs []string `json:"extra_zone_ids,omitempty"`
+
+	// ExtraManagedRuleIDs holds the rule ID the plugin created in each extra zone (zone ID -> rule ID); bookkeeping owned by the
+	// blocker, like ManagedRuleID.
+	ExtraManagedRuleIDs map[string]string `json:"extra_managed_rule_ids,omitempty"`
+
+	// AdditionalTargets are further Cloudflare accounts (up to maxAdditionalTargets), each with its own token, IP list, zones
+	// and block action. The primary account is always the flat fields above, so a config written by an earlier version loads
+	// unchanged and an older version loading this file simply ignores this field.
+	AdditionalTargets []TargetConfig `json:"additional_targets,omitempty"`
+}
+
+const (
+	maxAdditionalTargets = 2 // primary + two
+	maxZonesPerTarget    = 5 // the primary zone plus up to four more
+	maxLabelLength       = 30
+)
+
+// TargetConfig is one additional Cloudflare account the plugin protects.
+type TargetConfig struct {
+	Label           string            `json:"label"`
+	Enabled         bool              `json:"enabled"`
+	APIToken        string            `json:"cloudflare_api_token"`
+	AccountID       string            `json:"cloudflare_account_id"`
+	ZoneIDs         []string          `json:"zone_ids"`
+	IPListName      string            `json:"ip_list_name"`
+	RuleDescription string            `json:"rule_description"`
+	BlockAction     string            `json:"block_action"`
+	MaxIPListItems  int               `json:"max_ip_list_items"`
+	ManagedRuleIDs  map[string]string `json:"managed_rule_ids,omitempty"` // zone ID -> rule ID (bookkeeping)
+}
+
+// Configured reports whether this target has what it needs to talk to Cloudflare.
+func (t TargetConfig) Configured() bool {
+	return t.APIToken != "" && t.AccountID != "" && len(t.ZoneIDs) > 0
+}
+
+// cloudflareIDRe is deliberately lenient (Cloudflare IDs are 32 hex characters today): it only keeps junk, spaces and URL
+// fragments out of a value that is interpolated into API paths.
+var cloudflareIDRe = regexp.MustCompile(`^[A-Za-z0-9]{16,64}$`)
+
+// AnyCloudflareConfigured reports whether at least one Cloudflare target (the primary, or an enabled additional one) is usable.
+func (c Config) AnyCloudflareConfigured() bool {
+	if c.Configured() {
+		return true
+	}
+	for _, t := range c.AdditionalTargets {
+		if t.Enabled && t.Configured() {
+			return true
+		}
+	}
+	return false
+}
+
+// normaliseTargets validates and tidies the multi-target part of an incoming config and carries bookkeeping the form never sends
+// (stored tokens, managed rule IDs) forward from the current config. It does not touch the single-account fields.
+func normaliseTargets(in *Config, current Config) error {
+	// Extra zones of the primary account.
+	zones, err := normaliseZoneIDs(in.ExtraZoneIDs, in.CloudflareZoneID)
+	if err != nil {
+		return fmt.Errorf("extra zones: %w", err)
+	}
+	if len(zones)+1 > maxZonesPerTarget {
+		return fmt.Errorf("too many zones for the primary account (%d, max %d)", len(zones)+1, maxZonesPerTarget)
+	}
+	in.ExtraZoneIDs = zones
+	in.ExtraManagedRuleIDs = keepRuleIDs(current.ExtraManagedRuleIDs, zones)
+
+	if len(in.AdditionalTargets) > maxAdditionalTargets {
+		return fmt.Errorf("too many additional accounts (%d, max %d)", len(in.AdditionalTargets), maxAdditionalTargets)
+	}
+	labels := map[string]bool{"primary": true}
+	for i := range in.AdditionalTargets {
+		t := &in.AdditionalTargets[i]
+		t.Label = strings.TrimSpace(t.Label)
+		if t.Label == "" {
+			t.Label = fmt.Sprintf("Account %d", i+2)
+		}
+		if len(t.Label) > maxLabelLength {
+			return fmt.Errorf("account %d: label is longer than %d characters", i+2, maxLabelLength)
+		}
+		if labels[strings.ToLower(t.Label)] {
+			return fmt.Errorf("account %d: the label %q is already used", i+2, t.Label)
+		}
+		labels[strings.ToLower(t.Label)] = true
+
+		t.AccountID = strings.TrimSpace(t.AccountID)
+		if t.AccountID != "" && !cloudflareIDRe.MatchString(t.AccountID) {
+			return fmt.Errorf("account %d (%s): the account ID does not look like a Cloudflare ID", i+2, t.Label)
+		}
+		zs, err := normaliseZoneIDs(t.ZoneIDs, "")
+		if err != nil {
+			return fmt.Errorf("account %d (%s): %w", i+2, t.Label, err)
+		}
+		if len(zs) > maxZonesPerTarget {
+			return fmt.Errorf("account %d (%s): too many zones (%d, max %d)", i+2, t.Label, len(zs), maxZonesPerTarget)
+		}
+		t.ZoneIDs = zs
+
+		// A blank token means "keep the stored one", but only for the same account: never carry a token to a different account.
+		var old *TargetConfig
+		if i < len(current.AdditionalTargets) {
+			old = &current.AdditionalTargets[i]
+		}
+		if t.APIToken == "" && old != nil && old.AccountID == t.AccountID {
+			t.APIToken = old.APIToken
+		}
+		if old != nil {
+			t.ManagedRuleIDs = keepRuleIDs(old.ManagedRuleIDs, t.ZoneIDs)
+		} else {
+			t.ManagedRuleIDs = nil
+		}
+
+		if t.IPListName == "" {
+			t.IPListName = defaultConfig().IPListName
+		}
+		if !validIPListName(t.IPListName) {
+			return fmt.Errorf("account %d (%s): invalid list name %q (letters, digits and underscores only, max 50)", i+2, t.Label, t.IPListName)
+		}
+		if t.RuleDescription == "" {
+			t.RuleDescription = defaultConfig().RuleDescription
+		}
+		if t.BlockAction == "" {
+			t.BlockAction = defaultConfig().BlockAction
+		}
+		if !validBlockAction(t.BlockAction) {
+			return fmt.Errorf("account %d (%s): invalid block action %q: must be one of %s", i+2, t.Label, t.BlockAction, strings.Join(validBlockActions, ", "))
+		}
+		if t.MaxIPListItems <= 0 {
+			t.MaxIPListItems = defaultConfig().MaxIPListItems
+		}
+		if t.Enabled && !t.Configured() {
+			return fmt.Errorf("cannot enable account %d (%s): its token, account ID and at least one zone ID must all be set first", i+2, t.Label)
+		}
+	}
+	return nil
+}
+
+// normaliseZoneIDs trims, validates and de-duplicates zone IDs, dropping any that equal skip (the primary zone).
+func normaliseZoneIDs(in []string, skip string) ([]string, error) {
+	seen := map[string]bool{strings.TrimSpace(skip): true}
+	var out []string
+	for _, z := range in {
+		z = strings.TrimSpace(z)
+		if z == "" || seen[z] {
+			continue
+		}
+		if !cloudflareIDRe.MatchString(z) {
+			return nil, fmt.Errorf("%q does not look like a Cloudflare zone ID", z)
+		}
+		seen[z] = true
+		out = append(out, z)
+	}
+	return out, nil
+}
+
+// keepRuleIDs carries managed rule IDs forward for the zones that are still configured.
+func keepRuleIDs(old map[string]string, zones []string) map[string]string {
+	var out map[string]string
+	for _, z := range zones {
+		if id := old[z]; id != "" {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[z] = id
+		}
+	}
+	return out
 }
 
 // validBlockActions are the Cloudflare custom-rule actions this plugin will put on its managed rule.
@@ -205,6 +376,14 @@ func (cs *configStore) get() Config {
 func (cs *configStore) set(cfg Config) error {
 	cs.mu.Lock()
 	cs.cfg = cfg
+	cs.mu.Unlock()
+	return cs.save()
+}
+
+// update applies f to a copy of the config and saves the result, holding the lock so concurrent bookkeeping writes (rule IDs) cannot lose each other.
+func (cs *configStore) update(f func(*Config)) error {
+	cs.mu.Lock()
+	f(&cs.cfg)
 	cs.mu.Unlock()
 	return cs.save()
 }

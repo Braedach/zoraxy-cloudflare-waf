@@ -21,7 +21,9 @@ import (
 	"time"
 )
 
-const apiBase = "https://api.cloudflare.com/client/v4"
+// apiBase is a variable only so that a test-bench build can point the plugin at a fake Cloudflare with
+// -ldflags "-X .../internal/cloudflare.apiBase=http://..."; nothing in a release build sets it.
+var apiBase = "https://api.cloudflare.com/client/v4"
 
 type Client struct {
 	AccountID string

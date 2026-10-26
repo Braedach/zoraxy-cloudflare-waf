@@ -40,18 +40,22 @@ const (
 //go:embed www/*
 var wwwFS embed.FS
 
+// buildLabel is empty in a stable release. A release candidate is built with -ldflags "-X main.buildLabel=rc1"; the settings page then
+// shows a release-candidate banner and the start-up log line says so, so nobody runs one by mistake.
+var buildLabel string
+
 func main() {
 	runtimeCfg, err := plugin.ServeAndRecvSpec(&plugin.IntroSpect{
 		ID:            PLUGIN_ID,
 		Name:          "Zoraxy Cloudflare WAF plugin",
 		Author:        "Braedach",
 		AuthorContact: "https://github.com/Braedach",
-		Description:   "Detects scanners and abusive clients from Zoraxy's access log and blocks them at Cloudflare's edge (one IP List + one WAF rule), optionally also in Zoraxy's own blacklist. Blocks expire automatically. Dry-run by default.",
+		Description:   pluginDescription(),
 		URL:           "https://github.com/Braedach/zoraxy-cloudflare-waf",
 		Type:          plugin.PluginType_Utilities,
 		VersionMajor:  0,
-		VersionMinor:  3,
-		VersionPatch:  4,
+		VersionMinor:  4,
+		VersionPatch:  0,
 
 		UIPath: UI_PATH,
 
@@ -83,7 +87,7 @@ func main() {
 	if err != nil {
 		panic(fmt.Errorf("loading %s: %w", CONFIG_FILE, err))
 	}
-	log.Printf("zoraxy-cloudflare-waf starting against Zoraxy %s (uuid %s)", runtimeCfg.RuntimeConst.ZoraxyVersion, runtimeCfg.RuntimeConst.ZoraxyUUID)
+	log.Printf("zoraxy-cloudflare-waf starting against Zoraxy %s (uuid %s)%s", runtimeCfg.RuntimeConst.ZoraxyVersion, runtimeCfg.RuntimeConst.ZoraxyUUID, buildSuffix())
 	logConfigSummary("loaded config", cfgStore.get())
 
 	checker := ipfilter.NewChecker()
@@ -124,6 +128,7 @@ func main() {
 			}
 			return cloudflare.New(c.CloudflareAccountID, c.CloudflareZoneID, c.CloudflareAPIToken), true
 		},
+		GetTargets:          func() []blocker.Target { return cloudflareTargets(cfgStore) },
 		GetExpiryDays:       func() int { return cfgStore.get().BlockExpiryDays },
 		GetZoraxyBanEnabled: func() bool { return cfgStore.get().ZoraxyBanEnabled },
 		GetZoraxyRules:      func() []string { return cfgStore.get().ZoraxyAccessRules },
@@ -228,9 +233,10 @@ func registerUI(cfgStore *configStore, blk *blocker.Blocker, newZoraxyClient fun
 
 	uiRouter.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, struct {
-			Config  Config           `json:"config"`
-			History []blocker.Action `json:"history"`
-		}{Config: redactedConfig(cfgStore.get()), History: blk.History()})
+			Config     Config           `json:"config"`
+			History    []blocker.Action `json:"history"`
+			BuildLabel string           `json:"build_label,omitempty"`
+		}{Config: redactedConfig(cfgStore.get()), History: blk.History(), BuildLabel: buildLabel})
 	}, nil)
 
 	uiRouter.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
@@ -282,11 +288,15 @@ func registerUI(cfgStore *configStore, blk *blocker.Blocker, newZoraxyClient fun
 			http.Error(w, fmt.Sprintf("invalid block_action %q: must be one of %s", incoming.BlockAction, strings.Join(validBlockActions, ", ")), http.StatusBadRequest)
 			return
 		}
+		if err := normaliseTargets(&incoming, current); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 
 		// Server-side enforcement of "must be tested before it can run for real" -
 		// mirrors the UI's own gating but doesn't rely on it, since the UI can be
 		// bypassed by anyone hitting this endpoint directly.
-		if incoming.Enabled && !incoming.Configured() && !incoming.ZoraxyBanEnabled {
+		if incoming.Enabled && !incoming.AnyCloudflareConfigured() && !incoming.ZoraxyBanEnabled {
 			http.Error(w, "cannot enable: cloudflare_api_token, cloudflare_account_id and cloudflare_zone_id must all be set first (or enable \"Also ban in Zoraxy\" to run without Cloudflare)", http.StatusBadRequest)
 			return
 		}
@@ -378,22 +388,239 @@ func registerUI(cfgStore *configStore, blk *blocker.Blocker, newZoraxyClient fun
 		writeJSON(w, report)
 	}, nil)
 
+	// Read-only capability check for one tab (0 = primary, 1-2 = additional accounts), once per zone. Same checks as /api/test,
+	// for what is typed in the form; a blank token means "use the stored one".
+	uiRouter.HandleFunc("/api/test-target", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var in struct {
+			Index           int      `json:"index"`
+			Token           string   `json:"cloudflare_api_token"`
+			AccountID       string   `json:"cloudflare_account_id"`
+			ZoneIDs         []string `json:"zone_ids"`
+			IPListName      string   `json:"ip_list_name"`
+			RuleDescription string   `json:"rule_description"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		cur := cfgStore.get()
+		token, listName, ruleName := in.Token, in.IPListName, in.RuleDescription
+		known := map[string]string{} // zone ID -> rule ID the plugin already created there
+		switch {
+		case in.Index == 0:
+			if token == "" {
+				token = cur.CloudflareAPIToken
+			}
+			if listName == "" {
+				listName = cur.IPListName
+			}
+			if ruleName == "" {
+				ruleName = cur.RuleDescription
+			}
+			known[cur.CloudflareZoneID] = cur.ManagedRuleID
+			for z, id := range cur.ExtraManagedRuleIDs {
+				known[z] = id
+			}
+		case in.Index >= 1 && in.Index <= len(cur.AdditionalTargets):
+			old := cur.AdditionalTargets[in.Index-1]
+			if token == "" && old.AccountID == in.AccountID {
+				token = old.APIToken
+			}
+			if listName == "" {
+				listName = old.IPListName
+			}
+			if ruleName == "" {
+				ruleName = old.RuleDescription
+			}
+			for z, id := range old.ManagedRuleIDs {
+				known[z] = id
+			}
+		}
+		if listName == "" {
+			listName = defaultConfig().IPListName
+		}
+		if ruleName == "" {
+			ruleName = defaultConfig().RuleDescription
+		}
+		zones, err := normaliseZoneIDs(in.ZoneIDs, "")
+		if err != nil || token == "" || in.AccountID == "" || len(zones) == 0 || len(zones) > maxZonesPerTarget {
+			http.Error(w, "an api token, an account id and between one and five valid zone ids are required to test", http.StatusBadRequest)
+			return
+		}
+		type zoneReport struct {
+			ZoneID string `json:"zone_id"`
+			Report any    `json:"report"`
+		}
+		var reports []zoneReport
+		for _, z := range zones {
+			report := cloudflare.New(in.AccountID, z, token).TestCapabilities(r.Context(), listName, ruleName, known[z])
+			log.Printf("test connection (tab %d, zone %s): token_valid=%v lists_access=%v waf_access=%v list_exists=%v rules=%d rule_name_conflict=%v",
+				in.Index, z[:min(8, len(z))], report.TokenValid, report.ListsAccess, report.WAFAccess, report.ListExists, report.RuleCount, report.RuleNameConflict)
+			reports = append(reports, zoneReport{ZoneID: z, Report: report})
+		}
+		writeJSON(w, struct {
+			Index   int          `json:"index"`
+			Reports []zoneReport `json:"reports"`
+		}{Index: in.Index, Reports: reports})
+	}, nil)
+
 	uiRouter.AttachHandlerToMux(nil)
 }
 
 // logConfigSummary writes the settings that decide whether the plugin acts, never the credentials
 // themselves (only whether they are present).
 func logConfigSummary(prefix string, c Config) {
-	log.Printf("%s: enabled=%v dry_run=%v block_action=%s ip_list=%s react_to_blacklist=%v log_dir=%s credentials_set=%v expiry_days=%d zoraxy_ban=%v zoraxy_rules=%v",
+	extra := ""
+	if len(c.ExtraZoneIDs) > 0 || len(c.AdditionalTargets) > 0 {
+		var ts []string
+		for _, t := range c.AdditionalTargets {
+			ts = append(ts, fmt.Sprintf("%s(enabled=%v action=%s zones=%d list=%s credentials_set=%v)", t.Label, t.Enabled, t.BlockAction, len(t.ZoneIDs), t.IPListName, t.Configured()))
+		}
+		extra = fmt.Sprintf(" extra_zones=%d additional_accounts=[%s]", len(c.ExtraZoneIDs), strings.Join(ts, " "))
+	}
+	log.Printf("%s: enabled=%v dry_run=%v block_action=%s ip_list=%s react_to_blacklist=%v log_dir=%s credentials_set=%v expiry_days=%d zoraxy_ban=%v zoraxy_rules=%v%s",
 		prefix, c.Enabled, c.DryRun, c.BlockAction, c.IPListName, c.ReactToBlacklistEvent, c.ZoraxyLogDir, c.Configured(),
-		c.BlockExpiryDays, c.ZoraxyBanEnabled, c.ZoraxyAccessRules)
+		c.BlockExpiryDays, c.ZoraxyBanEnabled, c.ZoraxyAccessRules, extra)
 }
 
 func redactedConfig(c Config) Config {
 	if c.CloudflareAPIToken != "" {
 		c.CloudflareAPIToken = "•••• (set)"
 	}
+	if len(c.AdditionalTargets) > 0 {
+		ts := make([]TargetConfig, len(c.AdditionalTargets))
+		copy(ts, c.AdditionalTargets) // never redact the stored copy
+		for i := range ts {
+			if ts[i].APIToken != "" {
+				ts[i].APIToken = "•••• (set)"
+			}
+		}
+		c.AdditionalTargets = ts
+	}
 	return c
+}
+
+func pluginDescription() string {
+	d := "Detects scanners and abusive clients from Zoraxy's access log and blocks them at Cloudflare's edge (one IP List + one WAF rule per account), optionally also in Zoraxy's own blacklist. Blocks expire automatically. Dry-run by default."
+	if buildLabel != "" {
+		d = "RELEASE CANDIDATE " + buildLabel + " - for testing, not for production. " + d
+	}
+	return d
+}
+
+func buildSuffix() string {
+	if buildLabel == "" {
+		return ""
+	}
+	return " [RELEASE CANDIDATE " + buildLabel + " - not for production]"
+}
+
+// cloudflareTargets turns the saved settings into the blocker's Cloudflare targets: the primary account (one or more zones) and
+// each enabled, configured additional account. It is called on every block, so edits in the UI apply at once.
+func cloudflareTargets(cfgStore *configStore) []blocker.Target {
+	c := cfgStore.get()
+	var extra []int
+	for i, t := range c.AdditionalTargets {
+		if t.Enabled && t.Configured() {
+			extra = append(extra, i)
+		}
+	}
+
+	var out []blocker.Target
+	if c.Configured() {
+		label := ""
+		if len(extra) > 0 {
+			label = "primary"
+		}
+		primaryZone := c.CloudflareZoneID
+		out = append(out, blocker.Target{
+			Label:        label,
+			AccountKey:   c.CloudflareAccountID,
+			IPListName:   c.IPListName,
+			BlockAction:  c.BlockAction,
+			RuleName:     c.RuleDescription,
+			MaxListItems: c.MaxIPListItems,
+			Zones:        append([]string{primaryZone}, c.ExtraZoneIDs...),
+			NewClient: func(zone string) (*cloudflare.Client, bool) {
+				cur := cfgStore.get()
+				if !cur.Configured() {
+					return nil, false
+				}
+				if zone == "" {
+					zone = cur.CloudflareZoneID
+				}
+				return cloudflare.New(cur.CloudflareAccountID, zone, cur.CloudflareAPIToken), true
+			},
+			GetRuleID: func(zone string) string {
+				cur := cfgStore.get()
+				if zone == "" || zone == cur.CloudflareZoneID {
+					return cur.ManagedRuleID
+				}
+				return cur.ExtraManagedRuleIDs[zone]
+			},
+			SetRuleID: func(zone, id string) {
+				if err := cfgStore.update(func(cur *Config) {
+					if zone == "" || zone == cur.CloudflareZoneID {
+						cur.ManagedRuleID = id
+						return
+					}
+					if cur.ExtraManagedRuleIDs == nil {
+						cur.ExtraManagedRuleIDs = map[string]string{}
+					}
+					cur.ExtraManagedRuleIDs[zone] = id
+				}); err != nil {
+					log.Printf("persisting managed rule id: %v", err)
+				}
+			},
+		})
+	}
+	for _, i := range extra {
+		i := i
+		t := c.AdditionalTargets[i]
+		out = append(out, blocker.Target{
+			Label:        t.Label,
+			AccountKey:   t.AccountID,
+			IPListName:   t.IPListName,
+			BlockAction:  t.BlockAction,
+			RuleName:     t.RuleDescription,
+			MaxListItems: t.MaxIPListItems,
+			Zones:        append([]string(nil), t.ZoneIDs...),
+			NewClient: func(zone string) (*cloudflare.Client, bool) {
+				cur := cfgStore.get()
+				if i >= len(cur.AdditionalTargets) || !cur.AdditionalTargets[i].Configured() {
+					return nil, false
+				}
+				ct := cur.AdditionalTargets[i]
+				return cloudflare.New(ct.AccountID, zone, ct.APIToken), true
+			},
+			GetRuleID: func(zone string) string {
+				cur := cfgStore.get()
+				if i >= len(cur.AdditionalTargets) {
+					return ""
+				}
+				return cur.AdditionalTargets[i].ManagedRuleIDs[zone]
+			},
+			SetRuleID: func(zone, id string) {
+				if err := cfgStore.update(func(cur *Config) {
+					if i >= len(cur.AdditionalTargets) {
+						return
+					}
+					ct := &cur.AdditionalTargets[i]
+					if ct.ManagedRuleIDs == nil {
+						ct.ManagedRuleIDs = map[string]string{}
+					}
+					ct.ManagedRuleIDs[zone] = id
+				}); err != nil {
+					log.Printf("persisting managed rule id: %v", err)
+				}
+			},
+		})
+	}
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
