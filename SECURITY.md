@@ -13,7 +13,7 @@ practical, and you will be credited if you wish.
 
 ## Supported versions
 
-Only the latest release receives fixes. See the [releases](https://github.com/Braedach/zoraxy-cloudflare-waf/releases) and the [changelog](CHANGELOG.md).
+Only the latest **stable** release receives fixes; a release candidate (a pre-release such as `v0.4.0-rc1`) is for testing and is not supported for production. See the [releases](https://github.com/Braedach/zoraxy-cloudflare-waf/releases) and the [changelog](CHANGELOG.md).
 
 ## What the plugin does and does not do
 
