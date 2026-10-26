@@ -2,6 +2,12 @@
 
 Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's plugin list).
 
+## 0.4.0-rc1 — unreleased (release candidate, branch `feature/multi-target`)
+**Why:** issue #5 asks for more than one Cloudflare zone and account. **Not released: needs testing by someone with more than one account.** See `docs/RELEASE-CANDIDATE.md`.
+- Up to three Cloudflare accounts (tabs *Cloudflare Account 1, 2, 3*), each with its own token, Account ID, list, rule name and block action, and up to five zones per account (fifteen in all).
+- One failing account never stops the others: new result **partial**, with the failing account named in the action detail. Expiry runs per distinct list.
+- Single-account configurations behave exactly as in 0.3.4 and their settings file is not changed; new settings keys appear only when a second account or zone is used.
+
 ## 0.3.4 — 2026-10-26
 **Why this release:** the "How this works" help on the settings page had drifted from the code (it still said the Recent actions table empties on restart, described dry run as Cloudflare-only, and listed only some of the scanner paths). Page text and docs only; **no change to detection, bans, expiry or the Cloudflare/Zoraxy calls.**
 - Settings page help corrected: history survives restarts (last 200 actions, `zoraxy_actions.jsonl`); dry run stops both layers; the re-block cooldown (default 24 h) is named and kept apart from expiry (default 14 days); Zoraxy-only mode; the full list of paths that count as a scanner probe; what is never blocked; hourly expiry (200 a run); list-name limit and defaults; never reuse an allow list; what a Zoraxy-side ban needs to work; one account and zone per instance (with the workaround); no unblock button.
