@@ -408,6 +408,9 @@ const PROBE_CATEGORIES = [
   { id: "ci-config", text: "CI definitions (site root only)", ex: "/.github/, /.gitlab/, /.circleci/, /.gitlab-ci.yml, /.travis.yml" },
   { id: "credential-file", text: "Files named like credentials", ex: "credentials.json, client_secret…, service-account…" },
   { id: "ssh-key", text: "SSH private keys", ex: "id_rsa, id_ed25519, id_ecdsa" },
+  { id: "exploit-endpoints", text: "Known exploit endpoints", ex: "/vendor/phpunit/…, /_ignition/, /debug/default/, /vendor/laravel-filemanager, /wp-json/gravitysmtp/, scanner canary paths (…-notfound)" },
+  { id: "php-diagnostics", text: "PHP diagnostics pages", ex: "phpinfo.php, php-info.php, /phpinfo, /info.php (root only), /_profiler/phpinfo" },
+  { id: "panel-and-debug", text: "Hosting-panel and debug endpoints (site root only)", ex: "/___proxy_subdomain_cpanel, /server-status, /_profiler, /telescope/requests, /trace.axd, /@vite/env" },
 ];
 
 function renderProbeCats(disabled) {

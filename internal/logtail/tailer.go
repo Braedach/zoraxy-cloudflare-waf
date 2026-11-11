@@ -68,6 +68,19 @@ var probePatterns = []struct {
 	{"credential-dotfile", regexp.MustCompile(`(?i)^/\.(boto|s3cfg|amplifyrc)(?:[^a-z0-9_]|$)`)},
 	{"credential-file", regexp.MustCompile(`(?i)/[^/?]*(credentials|client_secret|service[-_]?account|application_default_credentials)[^/?]*\.(json|xml|db|ya?ml)(?:\?|$)`)},
 	{"ssh-key", regexp.MustCompile(`(?i)/id_(rsa|ed25519|ecdsa)(?:[^a-z0-9]|$)`)},
+
+	// Added after analysing seven months of real traffic (about 1,600 external addresses, 267 of them scanners):
+	//
+	// exploit-endpoints: paths of known remote-code-execution holes that no site serves on purpose (PHPUnit's eval-stdin,
+	// Laravel Ignition, Yii debug, laravel-filemanager, a WordPress plugin CVE, and the "-notfound" canary paths some
+	// scanners use to learn how a server answers a missing page). Eleven scanners that never tripped the error threshold
+	// (8 to 101 requests each) asked for these.
+	{"exploit-endpoints", regexp.MustCompile(`(?i)/vendor/(phpunit|laravel-filemanager)(/|$|\?)|/_ignition/|/debug/default/|/wp-json/gravitysmtp/|/ps-[0-9a-f]{8,}-[0-9a-f]+-notfound`)},
+	// php-diagnostics: phpinfo pages. A person never needs one from the public internet; an admin who does can untick the
+	// family or list the path. /info.php is matched at the root only (a deeper info.php is more likely an ordinary page).
+	{"php-diagnostics", regexp.MustCompile(`(?i)/(phpinfo|php[-_]?info|_phpinfo|pinfo)\.php(?:\?|$)|^/info\.php(?:\?|$)|/_profiler/phpinfo|/phpinfo(?:[/?]|$)`)},
+	// panel-and-debug: hosting-panel proxy paths and framework or server debug endpoints, at the site root only.
+	{"panel-and-debug", regexp.MustCompile(`(?i)/___proxy_subdomain_(whm|cpanel|webmail)|^/(server-status|_profiler|telescope/requests|trace\.axd|@vite/env)(?:[/?]|$)`)},
 }
 
 // knownLegitimatePaths are exact request paths that look like probes to a pattern but are an application's own
@@ -271,7 +284,9 @@ const heartbeatEvery = 30 * time.Minute
 
 func New(cfg Config, onEvent func(Candidate)) *Tailer {
 	if cfg.PollInterval == 0 {
-		cfg.PollInterval = 2 * time.Second
+		// Half a second: a sweep of 54 paths lasts about four seconds, so the old 2 s poll alone let most of it through before
+		// the first request was even read. Reading the end of a file that has not grown costs next to nothing.
+		cfg.PollInterval = 500 * time.Millisecond
 	}
 	return &Tailer{
 		cfg:     cfg,

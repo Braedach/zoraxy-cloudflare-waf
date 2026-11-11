@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Real Zoraxy access-log line shape:
@@ -67,7 +68,7 @@ func TestProbePaths_LegitimatePathsAreNeverFlagged(t *testing.T) {
 		"/.claudeish", "/.cursorrules-doc", "/mcp.json", "/.githubusercontent", "/s3cfg", "/.boto3",
 		"/environment", "/.environment", "/.envrc", "/app.env.js",
 		"/config.json", "/manifest.json", "/package.json",
-		"/phpinfo.php", "/wp-login.php", "/xmlrpc.php", // deliberately not covered - see probePatterns
+		"/wp-login.php", "/xmlrpc.php", // deliberately not covered - see probePatterns (phpinfo moved to the php-diagnostics family in v0.3.6)
 		"/backup.zip", "/dump.tar.gz", "/db.sql.gz",
 		"/api/credentialsbackup", "/users/credentials", // no .json/.xml/... extension
 		"/ssh/keys", "/identity", "/docs/ssh-keys-guide",
@@ -182,7 +183,7 @@ func mustSettings(t *testing.T, disabled, allow []string) *ProbeSettings {
 }
 
 func TestProbeCategories_ListIsStableAndComplete(t *testing.T) {
-	want := []string{"vcs", "dotenv", "tool-or-cloud-dir", "credential-dotfile", "agent-config", "ci-config", "credential-file", "ssh-key"}
+	want := []string{"vcs", "dotenv", "tool-or-cloud-dir", "credential-dotfile", "agent-config", "ci-config", "credential-file", "ssh-key", "exploit-endpoints", "php-diagnostics", "panel-and-debug"}
 	got := ProbeCategories()
 	if len(got) != len(want) {
 		t.Fatalf("categories = %v, want %v (the settings page lists these; update both)", got, want)
@@ -368,5 +369,93 @@ func BenchmarkHandleLine_Probe(b *testing.B) {
 				}
 			})
 		}
+	}
+}
+
+// ---- families added from the analysis of real traffic ----
+
+func TestNewFamilies_RealScannerPathsAreFlaggedWithTheRightLabel(t *testing.T) {
+	cases := map[string][]string{
+		"exploit-endpoints": {
+			"/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php", "/vendor/phpunit/", "/sub/vendor/phpunit/phpunit/x.php",
+			"/_ignition/execute-solution", "/laravel/_ignition/health-check", "/debug/default/view", "/debug/default/index",
+			"/vendor/laravel-filemanager/js/script.js", "/public/vendor/laravel-filemanager/js/script.js",
+			"/wp-json/gravitysmtp/v1/tests/mock-data?page=gravitysmtp-settings",
+			"/ps-18dad9886074beaa-1904a0-notfound", "/ps-18d8c4ff4eec5aa6-20029-notfound",
+		},
+		"php-diagnostics": {
+			"/phpinfo.php", "/php-info.php", "/php_info.php", "/_phpinfo.php", "/pinfo.php", "/info.php", "/phpinfo", "/phpinfo/", "/phpinfo?x=1",
+			"/_profiler/phpinfo", "/api/phpinfo.php", "/admin/phpinfo.php", "/public/phpinfo.php", "/PHPINFO.PHP",
+		},
+		"panel-and-debug": {
+			"/___proxy_subdomain_cpanel", "/___proxy_subdomain_whm/login", "/___proxy_subdomain_webmail",
+			"/server-status", "/server-status?auto", "/server-status/", "/_profiler", "/_profiler/", "/telescope/requests", "/trace.axd", "/@vite/env",
+		},
+	}
+	for want, paths := range cases {
+		for _, status := range []int{200, 307, 404} {
+			for _, p := range paths {
+				got := collect(line("203.0.113.9", "UA", "GET", p, status))
+				if len(got) != 1 {
+					t.Errorf("%s (status %d): expected 1 candidate, got %d", p, status, len(got))
+					continue
+				}
+				// (a path caught first by the older exploit-pattern rule is fine too)
+				if got[0].Reason != "sensitive-path probe ("+want+"): "+p && got[0].Reason != "exploit-pattern-match in request line" &&
+					!strings.HasPrefix(got[0].Reason, "sensitive-path probe ("+want+")") {
+					t.Errorf("%s: want label %q, got %q", p, want, got[0].Reason)
+				}
+			}
+		}
+	}
+}
+
+func TestNewFamilies_OrdinaryPathsAreNeverFlagged(t *testing.T) {
+	paths := []string{
+		"/vendor/", "/vendors/app.js", "/vendor/bootstrap/css/site.css", "/assets/vendor/jquery.js", "/phpunit-guide", "/wp-json/wp/v2/posts",
+		"/ignition", "/debug", "/debug/default", "/debugging/default/view", "/notfound", "/ps-notfound", "/ps-123-notfound",
+		"/about/info.php", "/information.php", "/info", "/information", "/phpinfo-explained", "/blog/phpinfo-explained", "/php-info-article",
+		"/docs/server-status", "/blog/server-status-page", "/server-status-page", "/server-statuses", "/_profilerx", "/api/_profiler",
+		"/telescope", "/trace", "/vite/env", "/@vite/client", "/___proxy", "/cpanel",
+		"/graphql", "/login", "/api", "/about", "/config.json", "/config.js", "/env.js", "/runtime-config.js", "/env", "/console/",
+	}
+	for _, p := range paths {
+		if got := collect(line("203.0.113.9", "Mozilla/5.0", "GET", p, 200)); len(got) != 0 {
+			t.Errorf("%s must not be flagged, got %+v", p, got)
+		}
+	}
+}
+
+func TestNewFamilies_EachHasItsOwnSwitch(t *testing.T) {
+	for fam, p := range map[string]string{
+		"exploit-endpoints": "/_ignition/execute-solution",
+		"php-diagnostics":   "/phpinfo.php",
+		"panel-and-debug":   "/server-status",
+	} {
+		l := line("203.0.113.9", "UA", "GET", p, 200)
+		if got := collectWith(mustSettings(t, []string{fam}, nil), l); len(got) != 0 {
+			t.Errorf("%s: family %s is switched off, must not be flagged, got %+v", p, fam, got)
+		}
+		others := []string{}
+		for _, c := range ProbeCategories() {
+			if c != fam {
+				others = append(others, c)
+			}
+		}
+		if got := collectWith(mustSettings(t, others, nil), l); len(got) != 1 {
+			t.Errorf("%s: only family %s on, must be flagged, got %d", p, fam, len(got))
+		}
+		if got := collectWith(mustSettings(t, nil, []string{p}), l); len(got) != 0 {
+			t.Errorf("%s is on the never-ban list, must not be flagged", p)
+		}
+	}
+}
+
+func TestPollInterval_DefaultIsHalfASecond(t *testing.T) {
+	if got := New(Config{}, func(Candidate) {}).cfg.PollInterval; got != 500*time.Millisecond {
+		t.Errorf("default poll interval = %v, want 500ms", got)
+	}
+	if got := New(Config{PollInterval: 3 * time.Second}, func(Candidate) {}).cfg.PollInterval; got != 3*time.Second {
+		t.Errorf("an explicit poll interval must be kept, got %v", got)
 	}
 }
