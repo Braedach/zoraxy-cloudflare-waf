@@ -1,6 +1,9 @@
 package zoraxy_plugin
 
-import "testing"
+import (
+	"html"
+	"testing"
+)
 
 func TestSanitizeCSRFToken(t *testing.T) {
 	ok := []string{"abc123", "dGVzdC10b2tlbg==", "A-b_c.d+e/f=", "x"}
@@ -24,5 +27,14 @@ func TestSanitizeCSRFToken(t *testing.T) {
 	}
 	if got := sanitizeCSRFToken(string(long)); got != "missing-csrf-token" {
 		t.Errorf("a 513-character token must be refused")
+	}
+}
+
+// Valid tokens must pass through HTML escaping untouched, or the page's CSRF header would stop matching the cookie.
+func TestPlainTokensAreUnchangedByHTMLEscaping(t *testing.T) {
+	for _, v := range []string{"dGVzdC10b2tlbg==", "A-b_c.d+e/f=", "abcDEF0123456789"} {
+		if got := html.EscapeString(sanitizeCSRFToken(v)); got != v {
+			t.Errorf("%q changed to %q", v, got)
+		}
 	}
 }
