@@ -10,7 +10,7 @@ blocks expire automatically.
 
 - **What it is:** a Zoraxy plugin that turns scanner behaviour in Zoraxy's own access log into automatic bans at Cloudflare's edge, with an optional second layer in Zoraxy's blacklist. Bans expire; it ships in dry-run.
 - **Who it is for:** anyone publishing services through Zoraxy and Cloudflare (the Free plan is enough) who wants scanners stopped in seconds without hand-copying addresses.
-- **Status:** v0.4.0 (11 November 2026), running in production since 21 September 2026 (earlier versions), 116 tests, reproducible release builds. In October to the 25th it banned 107 distinct addresses.
+- **Status:** v0.4.0 (11 November 2026), running in production since 21 September 2026 (v0.4.0 on the author's proxy since 11 November 2026, upgraded from the tested release candidate rc2), 116 tests, reproducible release builds. In October to the 25th it banned 107 distinct addresses.
 - **New in v0.4.0** (details, mitigation and rollback: [docs/UPGRADING-0.4.0.md](docs/UPGRADING-0.4.0.md)):
   - **Several Cloudflare accounts and domains:** up to three accounts and fifteen domains (a Cloudflare *zone* is one domain), each account with its own token, list, rule name and block action; one failing account never stops the others. A single-account setup is unchanged.
   - **Better scanner detection:** three new families (known exploit endpoints, PHP diagnostics pages, hosting-panel and debug endpoints) on top of v0.3.5's; in seven months of real logs, 14 scanners are caught only by these, 11 of which were never banned before.
@@ -476,7 +476,7 @@ v0.3.0 predates the release build recipe and will not match.
 
 ## Status
 
-**v0.4.0 — released 11 November 2026** (adds several accounts and domains, three more scanner-path families, switches and a never-ban list, a 0.5 s poll; v0.3.5, 11 November 2026, added the agent-config and CI probe families, root-anchored; v0.3.4, 26 October 2026, corrected the settings-page help text only; the persistent action history, new in v0.3.3, was deployed on 21 October 2026; the results below are from v0.3.0 to v0.3.3 unless stated). Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
+**v0.4.0 — released 11 November 2026, and live on the author's production proxy the same day: the tested release candidate rc2 became v0.4.0 on the maintainer's own proxy (from v0.3.5, by the steps in the upgrade guide). All 35 proxied host names and aliases (10 of them aliases) returned the same status as before, none slower than a second; the 39 existing bans and 148 history entries were restored; the new families were seen detecting live in the journal; no errors.** (adds several accounts and domains, three more scanner-path families, switches and a never-ban list, a 0.5 s poll; v0.3.5, 11 November 2026, added the agent-config and CI probe families, root-anchored; v0.3.4, 26 October 2026, corrected the settings-page help text only; the persistent action history, new in v0.3.3, was deployed on 21 October 2026; the results below are from v0.3.0 to v0.3.3 unless stated). Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
 2026-09-21, the Zoraxy-blacklist layer since 2026-09-22.
 
 - *Production results to 26 October 2026 (v0.3.0 to v0.3.3, Zoraxy 3.3.5 release candidates 2 to 4):* in October to the 25th the plugin banned **107 distinct scanner addresses**
