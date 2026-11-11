@@ -9,7 +9,8 @@
 
 ## What it adds
 
-Three Cloudflare accounts instead of one, each with up to five zones: up to **fifteen zones**. On the settings page the Cloudflare section has three tabs,
+Three Cloudflare accounts instead of one, each with up to five zones: up to **fifteen zones**. (In Cloudflare a **zone is one domain**, for example `example.com`, and its subdomains
+belong to the same zone. An **account** is a Cloudflare login that can hold many domains. So this means up to three accounts and up to fifteen protected domains.) On the settings page the Cloudflare section has three tabs,
 **Cloudflare Account 1, 2 and 3**. Each tab has its own API token, Account ID, zone IDs, IP list name, rule name and **block action** (for example
 `block` on one account and `managed_challenge` on another). A blocked IP goes to every enabled account and zone. One account failing never stops the others.
 If you use only Cloudflare Account 1, **nothing changes**: same settings, same behaviour, same files.
@@ -17,7 +18,7 @@ If you use only Cloudflare Account 1, **nothing changes**: same settings, same b
 ## Before you start
 
 1. A Cloudflare API token **per account**, each with `Account → Account Filter Lists → Edit` and `Zone → WAF → Edit` (scoped to that account and its zones).
-2. The Account ID and the zone IDs of each account (Cloudflare dashboard, the zone's Overview page, right-hand column).
+2. The Account ID and the Zone ID of each domain (zone) you want protected, for each account (Cloudflare dashboard: open the domain, **Overview** page, right-hand column, scroll down to **API**).
 3. The **Free plan allows one IP list per account**. The plugin uses exactly one per account. If an account already holds another list it cannot create its own
    (Cloudflare error 10019); the plugin says so and the other accounts are unaffected.
 4. Each zone needs one free custom-rule slot (Free plan: five per zone).

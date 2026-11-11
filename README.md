@@ -198,7 +198,9 @@ account's IP lists and this one zone's WAF rules, nothing else in your Cloudflar
 
 Both the Account ID and Zone ID (for the plugin's own config, separate from the token
 scoping above) are on the zone's **Overview** page in the Cloudflare dashboard, right-hand
-sidebar.
+column (scroll down to **API**). In Cloudflare a **zone is simply one domain** you have added
+(for example `example.com`; its subdomains belong to the same zone), so each domain you protect has its own Zone ID.
+An **account** is your Cloudflare login and can hold many domains.
 
 Paste the token into the plugin's UI, then click **Test Connection** before doing anything
 else — it checks the token is valid and that both scopes actually work (a live, read-only
@@ -457,8 +459,8 @@ v0.3.0 predates the release build recipe and will not match.
   exception is the hard-coded n8n path. The older `/.vscode/`, `/.idea/` and `/.config/` patterns match anywhere in the path, so someone reading a repository that contains
   those folders through a git forge can be flagged; the agent-config and CI families added in v0.3.5 match at the site root only. Any Cloudflare edge rule that blocks the same
   paths has to be changed separately.
-- **One Cloudflare account and one zone per plugin instance.** The IP list is account-wide, but the plugin creates and maintains the WAF rule in a single zone.
-  Several zones behind one Zoraxy are not supported yet (asked for in [issue #5](https://github.com/Braedach/zoraxy-cloudflare-waf/issues/5)).
+- **One Cloudflare account and one zone (domain) per plugin instance.** The IP list is account-wide, but the plugin creates and maintains the WAF rule in a single zone (a zone is one domain).
+  Several domains behind one Zoraxy are not supported yet (asked for in [issue #5](https://github.com/Braedach/zoraxy-cloudflare-waf/issues/5)).
   **Workaround that works today:** because the IP list is account-wide, add the one-line custom rule `ip.src in $<your_list_name>` by hand in every other zone
   of the same account, with the action you prefer (Managed Challenge or Block). The plugin keeps the list current and never edits a rule it did not create,
   so the two do not interfere. The issue's reporter confirmed the workaround works well; native multi-zone and multi-account support is a possible future enhancement

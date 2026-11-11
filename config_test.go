@@ -134,3 +134,16 @@ func TestSettingsPage_ListsEveryProbeCategory(t *testing.T) {
 		}
 	}
 }
+
+// The help must say what a Cloudflare zone is: people who have never used the API do not know it is a domain.
+func TestSettingsPage_ExplainsThatAZoneIsADomain(t *testing.T) {
+	page, err := wwwFS.ReadFile("www/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Zone = a domain.", "Zone ID (the ID of your domain in Cloudflare)", "More domains (zones) in this account"} {
+		if !strings.Contains(string(page), want) {
+			t.Errorf("settings page no longer contains %q", want)
+		}
+	}
+}
