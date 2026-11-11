@@ -147,3 +147,35 @@ func TestSettingsPage_ExplainsThatAZoneIsADomain(t *testing.T) {
 		}
 	}
 }
+
+// A settings file that does not use the new probe settings must not gain keys when the plugin saves it (the release-candidate
+// documentation promises new keys appear only when a new feature is used).
+func TestConfig_SavingDoesNotAddProbeKeysUnlessUsed(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/cloudflarewaf.json"
+	if err := os.WriteFile(path, []byte(`{"enabled": true, "dry_run": true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := loadConfigStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.set(cs.get()); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	for _, k := range []string{"probe_disabled_categories", "probe_allow_paths", "additional_targets", "extra_zone_ids"} {
+		if strings.Contains(string(raw), k) {
+			t.Errorf("saving an old settings file added the key %q:\n%s", k, raw)
+		}
+	}
+	c := cs.get()
+	c.ProbeAllowPaths = []string{"/a/*"}
+	if err := cs.set(c); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(path)
+	if !strings.Contains(string(raw), "probe_allow_paths") {
+		t.Errorf("a configured never-ban list must be saved:\n%s", raw)
+	}
+}

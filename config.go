@@ -109,12 +109,12 @@ type Config struct {
 	// ProbeDisabledCategories switches off whole families of the sensitive-path probe detector (labels from
 	// logtail.ProbeCategories, e.g. "ci-config"). Empty or absent = every category on, which is how the plugin
 	// behaved before this setting existed. Takes effect on save, without a restart.
-	ProbeDisabledCategories []string `json:"probe_disabled_categories"`
+	ProbeDisabledCategories []string `json:"probe_disabled_categories,omitempty"`
 
 	// ProbeAllowPaths are request paths that must never be flagged as a probe: exact paths, or a prefix when the
 	// entry ends in * (for example "/myapp/*"). Matched on the raw request path, query ignored. Empty = none.
 	// It applies to the sensitive-path probes only, not to exploit patterns or the 4xx/5xx threshold.
-	ProbeAllowPaths []string `json:"probe_allow_paths"`
+	ProbeAllowPaths []string `json:"probe_allow_paths,omitempty"`
 }
 
 const (
