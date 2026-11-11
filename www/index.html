@@ -130,9 +130,13 @@
     <li>The <em>Recent actions</em> table at the bottom of this page. It shows the last 200 actions and survives restarts: it is restored
       from <code>zoraxy_actions.jsonl</code> next to the plugin binary (if it is empty after a restart, look for <code>history:</code>
       lines in the journal).</li>
-    <li>The Zoraxy journal, which keeps the full history: <code>journalctl -u zoraxy -f | grep -F "Zoraxy Cloudflare WAF plugin"</code>.
-      A "logtail: alive" line appears every 30 minutes and an "expiry:" line every hour, so "running, nothing to do" can be told from
-      "not running".</li>
+    <li>The Zoraxy journal, which keeps the full history: <code>journalctl -u zoraxy -f | grep -F "Zoraxy Cloudflare WAF plugin"</code>
+      (use the name of your own Zoraxy service if it is not <code>zoraxy</code>; in a container, read the container's log instead).
+      Two lines tell "running, nothing to do" from "not running": a <strong>"logtail: alive"</strong> line every 30 minutes, always, while the plugin runs;
+      and, <strong>only while live</strong> (Enabled on, Dry run off, expiry period above 0), an <strong>"expiry:"</strong> line every hour, the first about two
+      minutes after the plugin starts, with one per Cloudflare account list when you use several accounts. In dry run, or with expiry set to 0, there are no
+      "expiry:" lines, and that is normal.</li>
+    <li>If you have switched any scanner-path family off, a <strong>WARNING</strong> line naming it is written when the plugin starts and every time you save.</li>
   </ul>
 
   <h3>Names — two different fields</h3>

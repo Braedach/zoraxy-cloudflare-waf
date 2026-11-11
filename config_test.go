@@ -179,3 +179,14 @@ func TestConfig_SavingDoesNotAddProbeKeysUnlessUsed(t *testing.T) {
 		t.Errorf("a configured never-ban list must be saved:\n%s", raw)
 	}
 }
+
+// The "Where to see what it's doing" help must not promise an expiry line in dry run (PruneExpired does nothing then).
+func TestSettingsPage_ExpiryLineIsOnlyPromisedWhileLive(t *testing.T) {
+	page, err := wwwFS.ReadFile("www/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(page), "only while live") || !strings.Contains(string(page), "there are no\n      \"expiry:\" lines") {
+		t.Errorf("the help must say that expiry: lines appear only while live")
+	}
+}

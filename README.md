@@ -250,7 +250,7 @@ Two different settings, easy to mix up:
   `more than N 4xx/5xx responses within Ws`)
   (`blocked`, `partial`, `dry-run`, `expired`, `error`, `skipped-invalid-ip`, `skipped-disabled`, `skipped-list-full`; repeat
   hits for an already-actioned IP are left out of the journal but still appear in the table), and a
-  `logtail: alive` heartbeat every 30 minutes with lines-read / candidates-raised counters and an `expiry:` line every hour. An address already actioned is
+  `logtail: alive` heartbeat every 30 minutes with lines-read / candidates-raised counters and, while live (not in dry run, expiry above 0), an `expiry:` line every hour. An address already actioned is
   skipped (`skipped-duplicate`) until the **re-block cooldown** (default 24 hours, a setting) passes; that is separate from block expiry (default 14 days).
 
 ### Block action
@@ -349,8 +349,8 @@ the CSRF token (injected into the page as `{{.csrfToken}}`) back in an **`X-CSRF
 **The Recent actions table is empty.** From v0.3.3 it is restored from `zoraxy_actions.jsonl` on start, so an empty table means the file is
 missing or unreadable (the journal says why: look for `history:` lines). On v0.3.2 and earlier it was kept in memory only and a restart
 cleared it. Either way nothing is lost: the blocks themselves, the Cloudflare list, the Zoraxy bans and the plugin's own ban record all
-survive a restart. The other durable log is the journal — `journalctl -u zoraxy | grep -F "Zoraxy Cloudflare WAF plugin"` — which also carries a heartbeat every 30 minutes and an
-hourly expiry line, so you can tell "running, nothing to do" from "not running".
+survive a restart. The other durable log is the journal — `journalctl -u zoraxy | grep -F "Zoraxy Cloudflare WAF plugin"` — which also carries a heartbeat every 30 minutes and, while live, an
+hourly expiry line, so you can tell "running, nothing to do" from "not running". (In dry run, or with expiry set to 0, there are no expiry lines; that is normal. If your Zoraxy service is not called `zoraxy`, use its name.)
 
 **Nothing appears in Cloudflare.** Expected until the first real block: the IP list and the WAF rule are created lazily. Until then
 Test Connection is the way to check the credentials. Also make sure **Dry run** is off — in dry run the plugin only logs what it
@@ -404,7 +404,7 @@ Your settings (`cloudflarewaf.json`) and the ban record (`zoraxy_bans.json`) liv
    ```
 
    Expect `enabled=true dry_run=false` once you have gone live. The binary reports its version with `./<binary> -introspect`.
-2. **It is alive.** An hourly `expiry:` line and a `logtail: alive` line (every 30 minutes) appear, with no `error`, `fail` or `panic` lines.
+2. **It is alive.** A `logtail: alive` line (every 30 minutes) and, once live, an hourly `expiry:` line appear, with no `error`, `fail` or `panic` lines.
 3. **The places a ban lives agree.** For the addresses the plugin banned, three counts should match: the Cloudflare IP list (Cloudflare
    dashboard, Manage Account, Configurations, Lists), the plugin's ban record (`python3 -c 'import json; print(len(json.load(open("zoraxy_bans.json"))))'`),
    and the blacklist of each Zoraxy access rule you selected (Zoraxy UI, Access Rules). No private or loopback address should be on the list.
