@@ -17,7 +17,7 @@ Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's 
 
 **Response time and coverage**
 - **Reaction time:** the log is read every **0.5 s instead of 2 s**. A sweep of about 54 paths lasts about four seconds, so the old poll let most of it through before the first request was read. Measured on a test bench: a request written to the log became a detection in **0.03 to 0.48 s (median 0.23 s)**. The time for Cloudflare to add the address comes on top and was not part of that measurement.
-- **Coverage:** in seven months of real logs from one proxy (about 1,600 external addresses, roughly 270 of which behaved as scanners and made over half of all external requests), 14 scanners are caught only by the new families: 11 were never banned before (they stayed under the 30-error threshold, with 8 to 101 requests each) and 3 were banned only at their 30th request.
+- **Coverage: the quiet scanners.** Any detector that counts errors has a blind spot: a scanner that stays under the threshold, such as a short sweep of known exploit paths that never produces 30 errors in a minute. The new families close it by banning on the first request. They were chosen from seven months of real logs from one proxy (about 1,600 external addresses, roughly 270 of them scanners); the quiet sweeps they catch ran 8 to 101 requests each.
 - **Cost:** replaying 143,000 real log lines showed no measurable extra work from the new settings (about 89 microseconds a line with them and 90 without).
 
 **Compatibility (is it breaking?)**
@@ -26,7 +26,7 @@ Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's 
 
 **How it was tested (no private data is used or published)**
 - 116 automated tests with the race detector, `gofmt` and `go vet` clean; deliberately breaking the switch or never-ban code makes the new tests fail.
-- 48,867 real external requests were replayed through the detector; every scanner caught only by the new families is a multi-path sweep and none looks like an ordinary visitor.
+- 48,867 real external requests were replayed through the detector: 14 sweeps in that data are caught only by the new families, every one a multi-path sweep, and none looks like an ordinary visitor.
 - A throwaway Zoraxy running the real plugin against a **simulated** Cloudflare with three accounts and four domains: all accounts blocked, a failing account (partial, then recovered), a same-named foreign rule left alone, the one-list limit reported by account, dry run (no calls made), expiry on every account's list, all new families reaching every account, switches and the never-ban list, upgrade from an old single-account settings file, and the **documented rollback** to v0.3.5 in both variants.
 - The settings page's Save path: the multi-account settings, tokens and labels survive a Save; invalid entries are refused and change nothing; a switch takes effect on the next log line.
 - **Upgraded in production on 11 November 2026:** the tested release candidate rc2 became v0.4.0 on the maintainer's own proxy (from v0.3.5, by the steps in the upgrade guide). All 35 proxied host names and aliases (10 of them aliases) returned the same status as before, none slower than a second; the 39 existing bans and 148 history entries were restored; the new families were seen detecting live in the journal; no errors.
