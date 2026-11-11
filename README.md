@@ -431,7 +431,7 @@ The plugin creates things in your Cloudflare account and in Zoraxy that it **doe
 
 Every release has a `SHA256SUMS` file; check it as shown in [Setup](#setup). You can also rebuild a release yourself and compare, because the builds
 are reproducible: with the Go 1.24 toolchain, `git checkout vX.Y.Z && ./build.sh release` produced binaries byte-for-byte identical to the published
-`cloudflarewaf_linux_*` files for v0.3.1 and v0.3.2 on all four architectures (checked 21 October 2026). v0.3.3 and v0.3.4 were each built twice from clean checkouts
+`cloudflarewaf_linux_*` files for v0.3.1 and v0.3.2 on all four architectures (checked 21 October 2026). v0.3.3, v0.3.4 and v0.3.5 were each built twice from clean checkouts
 of the release commit before publishing, with identical results, and the published files are that build (the commit is embedded in each binary: `go version -m <binary>`).
 v0.3.0 predates the release build recipe and will not match.
 
