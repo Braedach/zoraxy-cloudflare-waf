@@ -1,0 +1,47 @@
+{
+ "enabled": true,
+ "dry_run": false,
+ "cloudflare_api_token": "TOKEN-AAAA",
+ "cloudflare_account_id": "aaaaaaaaaaaaaaaa1111",
+ "cloudflare_zone_id": "zoneprimary000000001",
+ "extra_zone_ids": [
+  "zoneprimary000000002"
+ ],
+ "ip_list_name": "zoraxy_cf_waf_blocklist",
+ "rule_description": "Zoraxy CF WAF Sync - managed IP blocklist",
+ "block_action": "block",
+ "max_ip_list_items": 10000,
+ "zoraxy_log_dir": "/srv/zoraxy/log",
+ "ratelimit_window_seconds": 60,
+ "ratelimit_threshold": 30,
+ "react_to_blacklist_event": true,
+ "block_ttl_hours": 24,
+ "additional_targets": [
+  {
+   "label": "Cloudflare Account 2",
+   "enabled": true,
+   "cloudflare_api_token": "TOKEN-BBBB",
+   "cloudflare_account_id": "bbbbbbbbbbbbbbbb2222",
+   "zone_ids": [
+    "zonesecond000000001"
+   ],
+   "ip_list_name": "zoraxy_cf_waf_blocklist",
+   "rule_description": "Zoraxy CF WAF Sync - managed IP blocklist",
+   "block_action": "managed_challenge",
+   "max_ip_list_items": 10000
+  },
+  {
+   "label": "Cloudflare Account 3",
+   "enabled": true,
+   "cloudflare_api_token": "TOKEN-CCCC",
+   "cloudflare_account_id": "cccccccccccccccc3333",
+   "zone_ids": [
+    "zonethird0000000001"
+   ],
+   "ip_list_name": "zoraxy_cf_waf_blocklist",
+   "rule_description": "Zoraxy CF WAF Sync - managed IP blocklist",
+   "block_action": "block",
+   "max_ip_list_items": 10000
+  }
+ ]
+}
