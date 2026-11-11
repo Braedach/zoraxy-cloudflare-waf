@@ -5,6 +5,9 @@ Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's 
 ## 0.4.0 — unreleased (tested as release candidate rc2; see `docs/UPGRADING-0.4.0.md`)
 **Why:** two things in one release. Issue #5 asked for more than one Cloudflare account and domain. And seven months of real access logs showed where scanner detection could be both earlier and wider. Read `docs/UPGRADING-0.4.0.md` before upgrading: it covers install, **mitigation**, **rollback** and what was tested.
 
+**Security**
+- Closes two CodeQL "reflected cross-site scripting" alerts in the vendored Zoraxy plugin glue (`mod/zoraxy_plugin/embed_webserver.go`): the CSRF token Zoraxy passes in a request header was written into the settings page as received. It is now checked against a plain-token pattern first and replaced by the existing placeholder otherwise. The header normally comes from Zoraxy itself and a browser cannot be made to send it cross-site, so the practical risk was low; the scanner was right that the code did not check it.
+
 **Improvements**
 - **Several Cloudflare accounts and domains.** Up to three accounts (tabs *Cloudflare Account 1, 2, 3*), each with its own token, Account ID, IP list, rule name and block action, and up to five zones (a zone is one domain) per account: fifteen domains in all. One failing account never stops the others: new result **partial**, naming the account. Expiry runs per distinct list. A single-account setup behaves exactly as before and its settings file is not changed.
 - **Three new families of scanner paths, each with its own switch:** known exploit endpoints (PHPUnit, Laravel Ignition, Yii debug, laravel-filemanager, a WordPress plugin hole, scanner "-notfound" canary paths), PHP diagnostics pages (`phpinfo` and friends) and hosting-panel and debug endpoints (cPanel proxy paths, `/server-status`, `/_profiler`, `/telescope/requests`, `/trace.axd`, `/@vite/env`). **`/phpinfo.php`, which earlier versions deliberately ignored, is now flagged.**
@@ -22,7 +25,7 @@ Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's 
 - Detection is **stricter by default**. If an application you run legitimately serves one of the paths, its visitors would be banned: untick the family or add the path to the never-ban list (see *Mitigation* in the upgrade guide).
 
 **How it was tested (no private data is used or published)**
-- 115 automated tests with the race detector, `gofmt` and `go vet` clean; deliberately breaking the switch or never-ban code makes the new tests fail.
+- 116 automated tests with the race detector, `gofmt` and `go vet` clean; deliberately breaking the switch or never-ban code makes the new tests fail.
 - 48,867 real external requests were replayed through the detector; every scanner caught only by the new families is a multi-path sweep and none looks like an ordinary visitor.
 - A throwaway Zoraxy running the real plugin against a **simulated** Cloudflare with three accounts and four domains: all accounts blocked, a failing account (partial, then recovered), a same-named foreign rule left alone, the one-list limit reported by account, dry run (no calls made), expiry on every account's list, all new families reaching every account, switches and the never-ban list, upgrade from an old single-account settings file, and the **documented rollback** to v0.3.5 in both variants.
 - The settings page's Save path: the multi-account settings, tokens and labels survive a Save; invalid entries are refused and change nothing; a switch takes effect on the next log line.

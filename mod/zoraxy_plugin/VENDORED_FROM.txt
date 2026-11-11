@@ -1,1 +1,3 @@
 vendored zoraxy_plugin@49eb612, source: https://github.com/tobychui/zoraxy/tree/main/src/mod/plugins/zoraxy_plugin (AGPL-3.0, used out-of-process as IPC glue only)
+
+Local change (v0.4.0): embed_webserver.go sanitizeCSRFToken - the X-Zoraxy-Csrf header value is checked against a plain-token pattern before it is written into the page (CodeQL go/reflected-xss alerts). Re-apply it if the file is re-vendored.

@@ -117,7 +117,7 @@ Everything here takes effect when you press Save; none of it needs a restart.
 
 Built in small steps with a test for each behaviour, then exercised on a throwaway Zoraxy as release candidate rc2 before it became v0.4.0. No private data is in this document or in the repository: figures are aggregates and test addresses are from the documentation ranges.
 
-- **Automated tests: 115, all passing with the race detector**, `gofmt` and `go vet` clean. Beyond the multi-account tests (every account and domain blocked; one failing account gives *partial*; a same-named
+- **Automated tests: 116, all passing with the race detector**, `gofmt` and `go vet` clean. Beyond the multi-account tests (every account and domain blocked; one failing account gives *partial*; a same-named
   foreign rule is never edited; dry run makes no Cloudflare call; expiry per list; bad input rejected; tokens redacted in logs), the detection work adds tests for every new family at three response
   statuses, ordinary paths that must never be flagged, each switch, the never-ban list (exact, prefix, encoded and case variants), validation of what an operator may enter, live reload, a settings
   file that must not gain keys, and that the settings page lists every family. Deliberately breaking the switch or never-ban code makes these tests fail.
