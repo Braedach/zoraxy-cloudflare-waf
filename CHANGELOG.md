@@ -2,6 +2,9 @@
 
 Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's plugin list).
 
+## Unreleased (scripts only; no plugin change)
+- `scripts/forensic-report.sh` v2.12.0 (public edition): a new **Request Bursts from External Addresses** section, so a scripted sweep that Zoraxy served and proxied no longer disappears between the attack tables (it is one row: requests in the busiest window, proxied versus refused, probe-like paths, main target); plugin stops by Zoraxy are counted apart from plugin crashes; a target that was already offline at the start of the month gets its true start from the previous month's journal; the month, log and report directories and the recipient are configurable (`FORENSIC_MONTH`, `BURST_*`). The report is otherwise unchanged: run on the same real logs, the public and the maintainer's own editions give the same report apart from site-specific defaults. `scripts/README.md` updated.
+
 ## 0.4.0 — 2026-11-11 (tested as release candidate rc2; see `docs/UPGRADING-0.4.0.md`)
 **Why:** two things in one release. Issue #5 asked for more than one Cloudflare account and domain. And seven months of real access logs showed where scanner detection could be both earlier and wider. Read `docs/UPGRADING-0.4.0.md` before upgrading: it covers install, **mitigation**, **rollback** and what was tested.
 
