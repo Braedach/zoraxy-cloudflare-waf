@@ -2,7 +2,7 @@
 
 Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's plugin list).
 
-## 0.4.0 — unreleased (tested as release candidate rc2; see `docs/UPGRADING-0.4.0.md`)
+## 0.4.0 — 2026-11-11 (tested as release candidate rc2; see `docs/UPGRADING-0.4.0.md`)
 **Why:** two things in one release. Issue #5 asked for more than one Cloudflare account and domain. And seven months of real access logs showed where scanner detection could be both earlier and wider. Read `docs/UPGRADING-0.4.0.md` before upgrading: it covers install, **mitigation**, **rollback** and what was tested.
 
 **Security**

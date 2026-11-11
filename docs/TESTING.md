@@ -7,13 +7,15 @@ record every request, so the tests can assert not only what the plugin sends but
 gofmt -l .                          # must print nothing
 go vet ./...
 go test -race -count=1 ./...        # the race detector matters: detectors submit concurrently
-go test -race -count=1 -v ./... | grep -c '^--- PASS'   # 71 at v0.3.3, v0.3.4 and v0.3.5 (63 at v0.3.2)
+go test -race -count=1 -v ./... | grep -c '^--- PASS'   # 116 at v0.4.0 (71 at v0.3.3 to v0.3.5; 63 at v0.3.2)
 ```
+
+**Result at v0.4.0 (11 November 2026, Go 1.24):** 116 passed, 0 failed, race detector clean, `gofmt` and `go vet` clean. v0.4.0 adds the multi-account tests, tests for every probe family at three response statuses, the never-ban list and switches, settings-file compatibility, the settings page's text and the CSRF-token check. Beyond the unit tests it was run against a throwaway Zoraxy with a simulated Cloudflare (all accounts, a failing account, expiry, upgrade from an old settings file, rollback to v0.3.5); the full list is in [UPGRADING-0.4.0.md](UPGRADING-0.4.0.md).
 
 **Result at v0.3.5 (11 November 2026, Go 1.24):** 71 passed, 0 failed, race detector clean, `gofmt` and `go vet` clean. The count is unchanged: v0.3.5 extends the existing probe tests (17 new flagged paths at three response statuses, and root-anchoring cases for forge-style URLs) without adding test functions; the new cases fail against the code without the change.
 
 **Result at v0.3.4 (26 October 2026, Go 1.24, clean checkout):** 71 passed, 0 failed, race detector clean, `gofmt` and `go vet` clean. The count is unchanged from v0.3.3: v0.3.4 changes the settings-page help text and documentation only. (At v0.3.2: 63 passed; the 8 tests added in v0.3.3 cover the action history.)
-Release binaries for v0.3.1 and v0.3.2 also rebuild byte-for-byte identical to the published files, and v0.3.3, v0.3.4 and v0.3.5 were each built twice from clean checkouts with identical results (see the README, "Verifying a release").
+Release binaries for v0.3.1 and v0.3.2 also rebuild byte-for-byte identical to the published files, and v0.3.3, v0.3.4, v0.3.5 and v0.4.0 were each built twice from clean checkouts with identical results (see the README, "Verifying a release").
 
 ## What the 71 tests prove
 
