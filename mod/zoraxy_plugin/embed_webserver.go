@@ -3,6 +3,7 @@ package zoraxy_plugin
 import (
 	"embed"
 	"fmt"
+	"html"
 	"io/fs"
 	"net/http"
 	"net/url"
@@ -52,7 +53,7 @@ func NewPluginEmbedUIRouter(pluginID string, targetFs *embed.FS, targetFsPrefix 
 func (p *PluginUiRouter) populateCSRFToken(r *http.Request, fsHandler http.Handler) http.Handler {
 	//Get the CSRF token from header. Local change to the vendored file: the value is written into HTML and into a
 	//JavaScript string, so anything that is not a plain token is replaced (see sanitizeCSRFToken).
-	csrfToken := sanitizeCSRFToken(r.Header.Get("X-Zoraxy-Csrf"))
+	csrfToken := html.EscapeString(sanitizeCSRFToken(r.Header.Get("X-Zoraxy-Csrf"))) // belt and braces: valid tokens contain nothing to escape
 
 	//Return the middleware
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
