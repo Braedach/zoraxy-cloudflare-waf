@@ -1,3 +1,5 @@
 # Exceptions for scripts/leak-check.sh: one extended regex per line, matched against "path:line:text" of a finding.
 # Keep this list short and justified; every line is a hole in the check. Example:
 #   ^docs/example\.md:[0-9]+:.*192\.168\.0\.0/16 is the private range
+# The self-test plants fake leaks on purpose, to prove each rule fires. It contains no real data.
+^scripts/leak-check\.test\.sh:
