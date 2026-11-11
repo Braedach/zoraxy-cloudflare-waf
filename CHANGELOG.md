@@ -2,6 +2,17 @@
 
 Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's plugin list).
 
+## 0.3.5 — 2026-11-11
+**Why this release:** in November scripted sweeps were seen asking for about 54 secrets and configuration paths in roughly 4 seconds, including AI-coding-agent
+settings (`/.claude/settings.json`, `/.cursor/mcp.json`) and CI definitions (`/.github/workflows/…`). The plugin already banned most of them on the first
+request, but not these, so the sweep ran on until a path it did know arrived.
+- New sensitive-path families, banned on the first request like the existing ones: **agent-config** (`/.claude…`, `/.cursor…`, `/.mcp.json`),
+  **ci-config** (`/.github/`, `/.gitlab/`, `/.circleci/`, `/.gitlab-ci.yml`, `/.travis.yml`) and three more credential dotfiles (`.boto`, `.s3cfg`, `.amplifyrc`).
+- `/.github/workflows/ci.yml` was listed as a path that must never be flagged. That was a precaution, not a requirement: no application served through the
+  proxy asks for it. It is now flagged, and the test list says so.
+- Still deliberately not flagged: bare `.php`, `phpinfo`, `wp-*`, `config.json`, `.zip/.bak/.sql`, `Dockerfile` and `docker-compose.yml`.
+- Detection, expiry and the Cloudflare/Zoraxy calls are otherwise unchanged. 17 new paths are tested at three response statuses; the tests fail without the change (51 failures).
+
 ## 0.3.4 — 2026-10-26
 **Why this release:** the "How this works" help on the settings page had drifted from the code (it still said the Recent actions table empties on restart, described dry run as Cloudflare-only, and listed only some of the scanner paths). Page text and docs only; **no change to detection, bans, expiry or the Cloudflare/Zoraxy calls.**
 - Settings page help corrected: history survives restarts (last 200 actions, `zoraxy_actions.jsonl`); dry run stops both layers; the re-block cooldown (default 24 h) is named and kept apart from expiry (default 14 days); Zoraxy-only mode; the full list of paths that count as a scanner probe; what is never blocked; hourly expiry (200 a run); list-name limit and defaults; never reuse an allow list; what a Zoraxy-side ban needs to work; one account and zone per instance (with the workaround); no unblock button.
