@@ -12,7 +12,7 @@
   fieldset:disabled { opacity: 0.55; }
   legend { font-weight: 600; padding: 0 0.4rem; }
   label { display: block; margin: 0.6rem 0 0.2rem; font-size: 0.85rem; color: #333; }
-  input[type=text], input[type=password], input[type=number] {
+  input[type=text], input[type=password], input[type=number], textarea {
     width: 100%; max-width: 420px; padding: 0.4rem; box-sizing: border-box;
     border: 1px solid #ccc; border-radius: 4px;
   }
@@ -84,7 +84,10 @@
       <code>/.hg</code>), <code>/.env</code>, tool and cloud folders (<code>/.aws</code>, <code>/.docker</code>, <code>/.kube</code>,
       <code>/.ssh</code>, <code>/.azure</code>, <code>/.gcloud</code>, <code>/.config</code>, <code>/.anthropic</code>, <code>/.vscode</code>,
       <code>/.idea</code>), credential dotfiles (<code>.netrc</code>, <code>.npmrc</code>, <code>.pypirc</code>, <code>.htpasswd</code>,
-      <code>.htaccess</code>, <code>.bash_history</code>, <code>.DS_Store</code>), files named like credentials (<code>credentials.json</code>,
+      <code>.htaccess</code>, <code>.bash_history</code>, <code>.DS_Store</code>), AI-coding-agent and CI configuration at the site root
+      (<code>/.claude</code>, <code>/.cursor</code>, <code>/.mcp.json</code>, <code>/.github/</code>, <code>/.gitlab/</code>, <code>/.circleci/</code>,
+      <code>/.gitlab-ci.yml</code>, <code>/.travis.yml</code>, <code>.boto</code>, <code>.s3cfg</code>, <code>.amplifyrc</code>; a git forge showing a repository is
+      not affected, because these match at the root only), files named like credentials (<code>credentials.json</code>,
       <code>client_secret…</code>, <code>service-account…</code>) and SSH keys (<code>id_rsa</code>, <code>id_ed25519</code>,
       <code>id_ecdsa</code>); or (3) it makes more than the threshold of 4xx/5xx responses within the window (default 30 in 60 seconds; see
       <em>Detection thresholds</em>). Matching is on the request path, ignoring case; <code>/.well-known/</code> never matches.</li>
@@ -189,6 +192,21 @@
     <input type="number" id="windowSeconds" min="5">
     <label for="threshold">4xx/5xx threshold within window</label>
     <input type="number" id="threshold" min="1">
+  </fieldset>
+
+  <fieldset id="probeFieldset">
+    <legend>Scanner path detection (takes effect on save, no restart)</legend>
+    <div class="limits" style="margin-bottom:0.5rem">Each ticked family below bans a client that asks for one of its paths, <strong>whatever the response status</strong>.
+      Untick a family only if an application you run behind the proxy legitimately serves those paths: its visitors would otherwise be banned.
+      These switches change <strong>this plugin only</strong> — a Cloudflare edge rule that also blocks the same paths (for example your WAF rule for known probe paths)
+      has to be changed separately.</div>
+    <div id="probeCats"></div>
+    <div id="probeOffWarning" class="banner warn" style="display:none"></div>
+    <label for="probeAllow">Never ban these paths (one per line)</label>
+    <textarea id="probeAllow" rows="4" spellcheck="false" placeholder="/types/credentials.json&#10;/myapp/*"></textarea>
+    <div class="limits">An exact path, or a prefix ending in <code>*</code> (for example <code>/myapp/*</code>), starting with <code>/</code>. Matched on the request path as received, ignoring the
+      query string. A listed path is skipped by <strong>every</strong> family above. It does not affect exploit patterns (path traversal, injection) or the 4xx/5xx threshold.
+      A bare <code>/*</code> is refused. Save fails with a message if an entry is not valid.</div>
   </fieldset>
 
   <div id="acctTabs" class="tabs"></div>
@@ -416,6 +434,63 @@ function loadZoraxyRules() {
   }).catch(e => { status.textContent = "⚠ " + e.message; });
 }
 
+// Probe families: id = the label the plugin uses in a ban reason (must match logtail.ProbeCategories; a Go test checks this list).
+const PROBE_CATEGORIES = [
+  { id: "vcs", text: "Version-control folders", ex: "/.git, /.svn, /.hg" },
+  { id: "dotenv", text: "Environment files", ex: "/.env and variants" },
+  { id: "tool-or-cloud-dir", text: "Tool and cloud folders", ex: "/.aws, /.docker, /.kube, /.ssh, /.azure, /.gcloud, /.config, /.anthropic, /.vscode, /.idea" },
+  { id: "credential-dotfile", text: "Credential dotfiles", ex: ".netrc, .npmrc, .pypirc, .htpasswd, .htaccess, .bash_history, .DS_Store; at the site root: .boto, .s3cfg, .amplifyrc" },
+  { id: "agent-config", text: "AI-coding-agent configuration (site root only)", ex: "/.claude, /.cursor, /.mcp.json" },
+  { id: "ci-config", text: "CI definitions (site root only)", ex: "/.github/, /.gitlab/, /.circleci/, /.gitlab-ci.yml, /.travis.yml" },
+  { id: "credential-file", text: "Files named like credentials", ex: "credentials.json, client_secret…, service-account…" },
+  { id: "ssh-key", text: "SSH private keys", ex: "id_rsa, id_ed25519, id_ecdsa" },
+  { id: "exploit-endpoints", text: "Known exploit endpoints", ex: "/vendor/phpunit/…, /_ignition/, /debug/default/, /vendor/laravel-filemanager, /wp-json/gravitysmtp/, scanner canary paths (…-notfound)" },
+  { id: "php-diagnostics", text: "PHP diagnostics pages", ex: "phpinfo.php, php-info.php, /phpinfo, /info.php (root only), /_profiler/phpinfo" },
+  { id: "panel-and-debug", text: "Hosting-panel and debug endpoints (site root only)", ex: "/___proxy_subdomain_cpanel, /server-status, /_profiler, /telescope/requests, /trace.axd, /@vite/env" },
+];
+
+function renderProbeCats(disabled) {
+  const off = new Set(disabled || []);
+  const box = document.getElementById("probeCats");
+  box.innerHTML = "";
+  PROBE_CATEGORIES.forEach(c => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.id = "probe_" + c.id;
+    cb.dataset.probe = c.id;
+    cb.checked = !off.has(c.id);
+    const lab = document.createElement("label");
+    lab.htmlFor = cb.id;
+    lab.textContent = c.text + " — " + c.ex;
+    row.appendChild(cb);
+    row.appendChild(lab);
+    box.appendChild(row);
+    cb.addEventListener("change", updateProbeWarning);
+  });
+  updateProbeWarning();
+}
+
+function currentProbeDisabled() {
+  return Array.from(document.querySelectorAll("#probeCats input[type=checkbox]")).filter(cb => !cb.checked).map(cb => cb.dataset.probe);
+}
+
+function updateProbeWarning() {
+  const off = currentProbeDisabled();
+  const w = document.getElementById("probeOffWarning");
+  if (off.length) {
+    w.textContent = "Switched off: " + off.join(", ") + ". Clients asking for those paths will not be banned by this plugin.";
+    w.style.display = "block";
+  } else {
+    w.style.display = "none";
+  }
+}
+
+function currentProbeAllow() {
+  return document.getElementById("probeAllow").value.split("\n").map(x => x.trim()).filter(x => x !== "");
+}
+
 function fillForm(cfg) {
   document.getElementById("enabled").checked = !!cfg.enabled;
   document.getElementById("dryRun").checked = !!cfg.dry_run;
@@ -429,6 +504,8 @@ function fillForm(cfg) {
   document.getElementById("logDir").value = cfg.zoraxy_log_dir || "";
   document.getElementById("windowSeconds").value = cfg.ratelimit_window_seconds || 60;
   document.getElementById("threshold").value = cfg.ratelimit_threshold || 30;
+  renderProbeCats(cfg.probe_disabled_categories);
+  document.getElementById("probeAllow").value = (cfg.probe_allow_paths || []).join("\n");
   document.getElementById("apiToken").placeholder = cfg.cloudflare_api_token ? "currently set — leave blank to keep it" : "not set";
   document.getElementById("accountId").value = cfg.cloudflare_account_id || "";
   document.getElementById("zoneId").value = cfg.cloudflare_zone_id || "";
@@ -621,6 +698,8 @@ document.getElementById("saveBtn").addEventListener("click", () => {
     zoraxy_log_dir: document.getElementById("logDir").value,
     ratelimit_window_seconds: parseInt(document.getElementById("windowSeconds").value, 10) || 60,
     ratelimit_threshold: parseInt(document.getElementById("threshold").value, 10) || 30,
+    probe_disabled_categories: currentProbeDisabled(),
+    probe_allow_paths: currentProbeAllow(),
     cloudflare_api_token: document.getElementById("apiToken").value,
     cloudflare_account_id: document.getElementById("accountId").value,
     cloudflare_zone_id: document.getElementById("zoneId").value,

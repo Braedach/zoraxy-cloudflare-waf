@@ -2,11 +2,32 @@
 
 Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's plugin list).
 
+## 0.4.0-rc2 — unreleased (release candidate, branch `release/0.4.0-rc2`)
+**Why:** v0.4.0 will carry everything below in one release, so it is tested as one build. It adds to rc1 (several Cloudflare accounts and zones, issue #5): the v0.3.5 detection changes, operator control over the scanner-path detector, three more families chosen from real traffic, and a faster log poll. **Not released: needs testing by someone with more than one Cloudflare account.** See `docs/RELEASE-CANDIDATE.md` (install, rollback, mitigation).
+- **Per-family switches and a never-ban list** on the settings page (section *Scanner path detection*), applied on Save with no restart. The new settings (`probe_disabled_categories`, `probe_allow_paths`) are absent from an existing settings file, which means every family on and nothing allowed: the behaviour of earlier versions.
+- **Three new families, each with its own switch**, chosen from seven months of real traffic (about 1,600 external addresses, 267 of them scanners): *exploit-endpoints* (`/vendor/phpunit/`, `/_ignition/`, `/debug/default/`, `/vendor/laravel-filemanager`, `/wp-json/gravitysmtp/`, `…-notfound` canary paths), *php-diagnostics* (`phpinfo.php`, `php-info.php`, `/phpinfo`, `/_profiler/phpinfo`, `/info.php` at the root) and *panel-and-debug* (cPanel/WHM proxy paths, `/server-status`, `/_profiler`, `/telescope/requests`, `/trace.axd`, `/@vite/env`, site root only). **`/phpinfo.php` was on the "never flag" list in earlier versions and is now flagged.** 14 of the scanners in that data are caught only by these families.
+- **Faster log poll:** every 500 ms instead of 2 s. A sweep lasts about four seconds; measured on the bench, a log line becomes a detection in 0.03 to 0.48 s (median 0.23 s). Reading the end of a file that has not grown costs next to nothing.
+- **Behaviour change to know about:** detection is stricter by default (the families above, and the v0.3.5 agent-config and CI families). An application that legitimately serves one of those paths would see its visitors banned: untick the family or add the path to the never-ban list. See *Mitigation* in `docs/RELEASE-CANDIDATE.md`.
+- Includes v0.3.5 (below), which this branch did not have when rc1 was cut.
+
 ## 0.4.0-rc1 — unreleased (release candidate, branch `feature/multi-target`)
 **Why:** issue #5 asks for more than one Cloudflare zone and account. **Not released: needs testing by someone with more than one account.** See `docs/RELEASE-CANDIDATE.md`.
 - Up to three Cloudflare accounts (tabs *Cloudflare Account 1, 2, 3*), each with its own token, Account ID, list, rule name and block action, and up to five zones per account (fifteen in all).
 - One failing account never stops the others: new result **partial**, with the failing account named in the action detail. Expiry runs per distinct list.
 - Single-account configurations behave exactly as in 0.3.4 and their settings file is not changed; new settings keys appear only when a second account or zone is used.
+
+## 0.3.5 — 2026-11-11
+**Why this release:** in November scripted sweeps were seen asking for about 54 secrets and configuration paths in roughly 4 seconds, including AI-coding-agent
+settings (`/.claude/settings.json`, `/.cursor/mcp.json`) and CI definitions (`/.github/workflows/…`). The plugin already banned most of them on the first
+request, but not these, so the sweep ran on until a path it did know arrived.
+- New sensitive-path families, banned on the first request like the existing ones: **agent-config** (`/.claude…`, `/.cursor…`, `/.mcp.json`),
+  **ci-config** (`/.github/`, `/.gitlab/`, `/.circleci/`, `/.gitlab-ci.yml`, `/.travis.yml`) and three more credential dotfiles (`.boto`, `.s3cfg`, `.amplifyrc`).
+- The new families match **at the site root only** (`/.github/…`, not `/owner/repo/src/branch/main/.github/…`), so a git forge such as Gitea, Forgejo or GitLab showing a
+  repository's own `.github`, `.claude` or `.gitlab-ci.yml` never gets its readers banned. Scanners ask at the root. Tests cover forge-style URLs.
+- `/.github/workflows/ci.yml` at the root was listed as a path that must never be flagged. That was a precaution, not a requirement: no application served through the
+  proxy asks for it there. It is now flagged, and the test list says so.
+- Still deliberately not flagged: bare `.php`, `phpinfo`, `wp-*`, `config.json`, `.zip/.bak/.sql`, `Dockerfile` and `docker-compose.yml`.
+- Detection, expiry and the Cloudflare/Zoraxy calls are otherwise unchanged. 17 new paths are tested at three response statuses; the tests fail without the change (51 failures).
 
 ## 0.3.4 — 2026-10-26
 **Why this release:** the "How this works" help on the settings page had drifted from the code (it still said the Recent actions table empties on restart, described dry run as Cloudflare-only, and listed only some of the scanner paths). Page text and docs only; **no change to detection, bans, expiry or the Cloudflare/Zoraxy calls.**

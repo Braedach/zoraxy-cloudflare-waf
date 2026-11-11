@@ -139,9 +139,10 @@ func main() {
 	blk := blocker.New(deps, checker)
 	go pruneExpiredForever(blk)
 
-	startLogTailer(cfgStore, blk)
+	tailer := startLogTailer(cfgStore, blk)
+	applyProbeSettings(tailer, cfgStore.get())
 	registerEventSubscriber(cfgStore, blk)
-	registerUI(cfgStore, blk, newZoraxyClient)
+	registerUI(cfgStore, blk, newZoraxyClient, tailer)
 
 	serverAddr := "127.0.0.1:" + strconv.Itoa(runtimeCfg.Port)
 	log.Printf("zoraxy-cloudflare-waf listening on %s", serverAddr)
@@ -177,7 +178,7 @@ func refreshCloudflareRangesForever(checker *ipfilter.Checker) {
 	}
 }
 
-func startLogTailer(cfgStore *configStore, blk *blocker.Blocker) {
+func startLogTailer(cfgStore *configStore, blk *blocker.Blocker) *logtail.Tailer {
 	cfg := cfgStore.get()
 	t := logtail.New(logtail.Config{
 		LogDir:        cfg.ZoraxyLogDir,
@@ -190,6 +191,19 @@ func startLogTailer(cfgStore *configStore, blk *blocker.Blocker) {
 	// restart (Zoraxy's plugin manager can restart a plugin without a full reboot) - v1
 	// keeps the tailer's own config static after start rather than hot-reloading mid-file.
 	go t.Run(nil)
+	return t
+}
+
+// applyProbeSettings hands the operator's probe switches and never-ban paths to the running tailer. The config was
+// validated on save; a stored value that no longer validates (a hand edit) is logged and ignored, never half-applied.
+func applyProbeSettings(t *logtail.Tailer, c Config) {
+	disabled, allow, err := logtail.NormaliseProbeSettings(c.ProbeDisabledCategories, c.ProbeAllowPaths)
+	if err != nil {
+		log.Printf("probe settings ignored (every category stays on, nothing is allowed): %v", err)
+		t.SetProbeSettings(nil)
+		return
+	}
+	t.SetProbeSettings(logtail.NewProbeSettings(disabled, allow))
 }
 
 func registerEventSubscriber(cfgStore *configStore, blk *blocker.Blocker) {
@@ -225,7 +239,7 @@ func registerEventSubscriber(cfgStore *configStore, blk *blocker.Blocker) {
 	})
 }
 
-func registerUI(cfgStore *configStore, blk *blocker.Blocker, newZoraxyClient func() (*zoraxy.Client, bool)) {
+func registerUI(cfgStore *configStore, blk *blocker.Blocker, newZoraxyClient func() (*zoraxy.Client, bool), tailer *logtail.Tailer) {
 	uiRouter := plugin.NewPluginEmbedUIRouter(PLUGIN_ID, &wwwFS, "/www", UI_PATH)
 	uiRouter.RegisterTerminateHandler(func() {
 		log.Println("zoraxy-cloudflare-waf terminating on Zoraxy's request")
@@ -281,6 +295,12 @@ func registerUI(cfgStore *configStore, blk *blocker.Blocker, newZoraxyClient fun
 			http.Error(w, "\"Also ban in Zoraxy\" needs at least one Zoraxy access rule selected", http.StatusBadRequest)
 			return
 		}
+		disabledCats, allowPaths, err := logtail.NormaliseProbeSettings(incoming.ProbeDisabledCategories, incoming.ProbeAllowPaths)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		incoming.ProbeDisabledCategories, incoming.ProbeAllowPaths = disabledCats, allowPaths
 		if incoming.BlockAction == "" {
 			incoming.BlockAction = defaultConfig().BlockAction
 		}
@@ -305,6 +325,7 @@ func registerUI(cfgStore *configStore, blk *blocker.Blocker, newZoraxyClient fun
 			http.Error(w, "failed to save: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		applyProbeSettings(tailer, incoming)
 		logConfigSummary("config saved", incoming)
 		writeJSON(w, redactedConfig(cfgStore.get()))
 	}, nil)
@@ -482,9 +503,12 @@ func logConfigSummary(prefix string, c Config) {
 		}
 		extra = fmt.Sprintf(" extra_zones=%d additional_accounts=[%s]", len(c.ExtraZoneIDs), strings.Join(ts, " "))
 	}
-	log.Printf("%s: enabled=%v dry_run=%v block_action=%s ip_list=%s react_to_blacklist=%v log_dir=%s credentials_set=%v expiry_days=%d zoraxy_ban=%v zoraxy_rules=%v%s",
+	log.Printf("%s: enabled=%v dry_run=%v block_action=%s ip_list=%s react_to_blacklist=%v log_dir=%s credentials_set=%v expiry_days=%d zoraxy_ban=%v zoraxy_rules=%v probe_categories_off=%v probe_allow_paths=%d%s",
 		prefix, c.Enabled, c.DryRun, c.BlockAction, c.IPListName, c.ReactToBlacklistEvent, c.ZoraxyLogDir, c.Configured(),
-		c.BlockExpiryDays, c.ZoraxyBanEnabled, c.ZoraxyAccessRules, extra)
+		c.BlockExpiryDays, c.ZoraxyBanEnabled, c.ZoraxyAccessRules, c.ProbeDisabledCategories, len(c.ProbeAllowPaths), extra)
+	if len(c.ProbeDisabledCategories) > 0 {
+		log.Printf("%s: WARNING sensitive-path probe categories are switched OFF: %v - clients asking for those paths are no longer banned by this plugin", prefix, c.ProbeDisabledCategories)
+	}
 }
 
 func redactedConfig(c Config) Config {

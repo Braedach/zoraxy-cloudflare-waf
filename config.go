@@ -105,15 +105,25 @@ type Config struct {
 	// and block action. The primary account is always the flat fields above, so a config written by an earlier version loads
 	// unchanged and an older version loading this file simply ignores this field.
 	AdditionalTargets []TargetConfig `json:"additional_targets,omitempty"`
+
+	// ProbeDisabledCategories switches off whole families of the sensitive-path probe detector (labels from
+	// logtail.ProbeCategories, e.g. "ci-config"). Empty or absent = every category on, which is how the plugin
+	// behaved before this setting existed. Takes effect on save, without a restart.
+	ProbeDisabledCategories []string `json:"probe_disabled_categories"`
+
+	// ProbeAllowPaths are request paths that must never be flagged as a probe: exact paths, or a prefix when the
+	// entry ends in * (for example "/myapp/*"). Matched on the raw request path, query ignored. Empty = none.
+	// It applies to the sensitive-path probes only, not to exploit patterns or the 4xx/5xx threshold.
+	ProbeAllowPaths []string `json:"probe_allow_paths"`
 }
 
 const (
 	maxAdditionalTargets = 2 // Cloudflare Account 1 + two
 
 	// primaryLabel names the first account wherever several are shown (tab, log lines); an extra account cannot reuse it.
-	primaryLabel = "Cloudflare Account 1"
-	maxZonesPerTarget    = 5 // the primary zone plus up to four more
-	maxLabelLength       = 30
+	primaryLabel      = "Cloudflare Account 1"
+	maxZonesPerTarget = 5 // the primary zone plus up to four more
+	maxLabelLength    = 30
 )
 
 // TargetConfig is one additional Cloudflare account the plugin protects.

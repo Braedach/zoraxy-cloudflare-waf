@@ -118,12 +118,12 @@ func TestNormalise_Rejects(t *testing.T) {
 			c.AdditionalTargets = append(c.AdditionalTargets, TargetConfig{Label: "second", AccountID: acctC, APIToken: "x", ZoneIDs: []string{zone3}})
 		},
 		"the reserved label of account 1": func(c *Config) { c.AdditionalTargets[0].Label = "cloudflare account 1" },
-		"a label that is too long":   func(c *Config) { c.AdditionalTargets[0].Label = strings.Repeat("x", 31) },
-		"a bad account id":           func(c *Config) { c.AdditionalTargets[0].AccountID = "not an id/../x" },
-		"a bad zone id":              func(c *Config) { c.AdditionalTargets[0].ZoneIDs = []string{"zone with spaces"} },
-		"too many zones":             func(c *Config) { c.AdditionalTargets[0].ZoneIDs = []string{zone1, zone2, zone3, zone4, acctA, acctB} },
-		"a bad list name":            func(c *Config) { c.AdditionalTargets[0].IPListName = "has space" },
-		"a bad block action":         func(c *Config) { c.AdditionalTargets[0].BlockAction = "skip" },
+		"a label that is too long":        func(c *Config) { c.AdditionalTargets[0].Label = strings.Repeat("x", 31) },
+		"a bad account id":                func(c *Config) { c.AdditionalTargets[0].AccountID = "not an id/../x" },
+		"a bad zone id":                   func(c *Config) { c.AdditionalTargets[0].ZoneIDs = []string{"zone with spaces"} },
+		"too many zones":                  func(c *Config) { c.AdditionalTargets[0].ZoneIDs = []string{zone1, zone2, zone3, zone4, acctA, acctB} },
+		"a bad list name":                 func(c *Config) { c.AdditionalTargets[0].IPListName = "has space" },
+		"a bad block action":              func(c *Config) { c.AdditionalTargets[0].BlockAction = "skip" },
 		"enabling an incomplete account": func(c *Config) {
 			c.AdditionalTargets[0].Enabled = true
 			c.AdditionalTargets[0].ZoneIDs = nil

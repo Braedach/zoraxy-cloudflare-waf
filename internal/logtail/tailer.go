@@ -44,7 +44,7 @@ var (
 // counts (seen in practice: about half the scanners hitting a real deployment were invisible to the threshold rule).
 //
 // The set is deliberately narrow - VCS metadata, dotenv, cloud/tooling credential directories, credential
-// dotfiles, credential-named files and SSH keys - things with no legitimate reason to be requested over
+// dotfiles, AI-agent and CI configuration, credential-named files and SSH keys - things with no legitimate reason to be requested over
 // HTTP. Deliberately NOT included: bare .php, phpinfo, wp-*, config.json, .zip/.bak/.sql: legitimate
 // sites use those, and a false positive here means an operator locked out of their own site.
 // /.well-known/ (ACME, webfinger, nodeinfo, security.txt) never matches any of these.
@@ -56,8 +56,31 @@ var probePatterns = []struct {
 	{"dotenv", regexp.MustCompile(`(?i)/\.env(?:[^a-z]|$)`)},
 	{"tool-or-cloud-dir", regexp.MustCompile(`(?i)/\.(aws|docker|kube|ssh|azure|gcloud|config|anthropic|vscode|idea)(/|$|\?)`)},
 	{"credential-dotfile", regexp.MustCompile(`(?i)/\.(netrc|npmrc|pypirc|htpasswd|htaccess|bash_history|ds_store)(?:[^a-z0-9_]|$)`)},
+	// AI-coding-agent configuration (settings, MCP server definitions and the credentials inside them), CI pipeline
+	// definitions and three more credential dotfiles. Sweeps for these appeared in November 2026; no site serves
+	// them on purpose. ANCHORED TO THE SITE ROOT (^/): a git forge (Gitea, Forgejo, GitLab, cgit...) shows a repository's
+	// own .github/, .claude/ or .gitlab-ci.yml at /owner/repo/src/branch/main/.github/..., and a person reading code
+	// there is not a scanner. Scanners ask at the root. (The older families above are not anchored.)
+	{"agent-config", regexp.MustCompile(`(?i)^/\.(claude|cursor)(/|$|\?|\.json)`)},
+	{"agent-config", regexp.MustCompile(`(?i)^/\.mcp\.json(?:\?|$)`)},
+	{"ci-config", regexp.MustCompile(`(?i)^/\.(github|gitlab|circleci)(/|$|\?)`)},
+	{"ci-config", regexp.MustCompile(`(?i)^/\.(gitlab-ci|travis)\.ya?ml(?:\?|$)`)},
+	{"credential-dotfile", regexp.MustCompile(`(?i)^/\.(boto|s3cfg|amplifyrc)(?:[^a-z0-9_]|$)`)},
 	{"credential-file", regexp.MustCompile(`(?i)/[^/?]*(credentials|client_secret|service[-_]?account|application_default_credentials)[^/?]*\.(json|xml|db|ya?ml)(?:\?|$)`)},
 	{"ssh-key", regexp.MustCompile(`(?i)/id_(rsa|ed25519|ecdsa)(?:[^a-z0-9]|$)`)},
+
+	// Added after analysing seven months of real traffic (about 1,600 external addresses, 267 of them scanners):
+	//
+	// exploit-endpoints: paths of known remote-code-execution holes that no site serves on purpose (PHPUnit's eval-stdin,
+	// Laravel Ignition, Yii debug, laravel-filemanager, a WordPress plugin CVE, and the "-notfound" canary paths some
+	// scanners use to learn how a server answers a missing page). Eleven scanners that never tripped the error threshold
+	// (8 to 101 requests each) asked for these.
+	{"exploit-endpoints", regexp.MustCompile(`(?i)/vendor/(phpunit|laravel-filemanager)(/|$|\?)|/_ignition/|/debug/default/|/wp-json/gravitysmtp/|/ps-[0-9a-f]{8,}-[0-9a-f]+-notfound`)},
+	// php-diagnostics: phpinfo pages. A person never needs one from the public internet; an admin who does can untick the
+	// family or list the path. /info.php is matched at the root only (a deeper info.php is more likely an ordinary page).
+	{"php-diagnostics", regexp.MustCompile(`(?i)/(phpinfo|php[-_]?info|_phpinfo|pinfo)\.php(?:\?|$)|^/info\.php(?:\?|$)|/_profiler/phpinfo|/phpinfo(?:[/?]|$)`)},
+	// panel-and-debug: hosting-panel proxy paths and framework or server debug endpoints, at the site root only.
+	{"panel-and-debug", regexp.MustCompile(`(?i)/___proxy_subdomain_(whm|cpanel|webmail)|^/(server-status|_profiler|telescope/requests|trace\.axd|@vite/env)(?:[/?]|$)`)},
 }
 
 // knownLegitimatePaths are exact request paths that look like probes to a pattern but are an application's own
@@ -71,14 +94,140 @@ var knownLegitimatePaths = map[string]string{
 	"/types/credentials.json": "n8n",
 }
 
-// matchProbePath reports which probe pattern (if any) the request path matches, checking both the raw
-// and the percent-decoded form so %2e%67it style evasion doesn't slip through.
-func matchProbePath(path string) (string, bool) {
+// ProbeSettings is the operator's say over the sensitive-path probes: which categories are switched off and which
+// request paths must never be flagged. The zero value (and nil) means every category on and nothing allowed, which is
+// exactly how the plugin behaved before these settings existed.
+type ProbeSettings struct {
+	disabled map[string]bool // category label -> off
+	allowExa map[string]bool // exact raw paths (query ignored)
+	allowPre []string        // raw path prefixes (entries written with a trailing *)
+	// Counts for the startup/summary line.
+	NumDisabled, NumAllowed int
+}
+
+// Limits on what an operator can enter, so a typo cannot disable detection wholesale or bloat the config.
+const (
+	maxProbeAllowEntries = 100
+	maxProbeAllowLen     = 200
+)
+
+// ProbeCategories returns the category labels in a stable order (the label shown in a ban reason, e.g.
+// "sensitive-path probe (vcs)"). The settings page and the validation both use this list.
+func ProbeCategories() []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range probePatterns {
+		if !seen[p.label] {
+			seen[p.label] = true
+			out = append(out, p.label)
+		}
+	}
+	return out
+}
+
+// NormaliseProbeSettings validates and tidies what the operator entered: unknown categories are an error (a typo
+// must not silently leave a category on), entries are trimmed and de-duplicated, an allow entry must be an absolute
+// path, and a wildcard is allowed only as the final character and never so short that it covers a whole site.
+func NormaliseProbeSettings(disabled, allow []string) (cleanDisabled, cleanAllow []string, err error) {
+	known := map[string]bool{}
+	for _, c := range ProbeCategories() {
+		known[c] = true
+	}
+	seen := map[string]bool{}
+	for _, c := range disabled {
+		c = strings.TrimSpace(c)
+		if c == "" || seen[c] {
+			continue
+		}
+		if !known[c] {
+			return nil, nil, fmt.Errorf("unknown probe category %q (known: %s)", c, strings.Join(ProbeCategories(), ", "))
+		}
+		seen[c] = true
+		cleanDisabled = append(cleanDisabled, c)
+	}
+	seenA := map[string]bool{}
+	for _, a := range allow {
+		a = strings.TrimSpace(a)
+		if a == "" || seenA[a] {
+			continue
+		}
+		if len(a) > maxProbeAllowLen {
+			return nil, nil, fmt.Errorf("never-ban path too long (max %d characters): %.40s...", maxProbeAllowLen, a)
+		}
+		if a[0] != '/' {
+			return nil, nil, fmt.Errorf("never-ban path %q must start with /", a)
+		}
+		for _, r := range a {
+			if r <= ' ' || r == 0x7f || r == '?' || r == '#' {
+				return nil, nil, fmt.Errorf("never-ban path %q may not contain spaces, control characters, ? or # (give the path only, without a query)", a)
+			}
+		}
+		if i := strings.IndexByte(a, '*'); i >= 0 {
+			if i != len(a)-1 {
+				return nil, nil, fmt.Errorf("never-ban path %q: * is only allowed as the last character (a prefix such as /myapp/*)", a)
+			}
+			if len(strings.TrimSuffix(a, "*")) < 2 {
+				return nil, nil, fmt.Errorf("never-ban path %q is too broad: a prefix must name something below the site root, e.g. /myapp/*", a)
+			}
+		}
+		seenA[a] = true
+		cleanAllow = append(cleanAllow, a)
+	}
+	if len(cleanAllow) > maxProbeAllowEntries {
+		return nil, nil, fmt.Errorf("too many never-ban paths (%d, max %d)", len(cleanAllow), maxProbeAllowEntries)
+	}
+	return cleanDisabled, cleanAllow, nil
+}
+
+// NewProbeSettings builds the lookup structure from already-validated lists (see NormaliseProbeSettings).
+func NewProbeSettings(disabled, allow []string) *ProbeSettings {
+	ps := &ProbeSettings{disabled: map[string]bool{}, allowExa: map[string]bool{}}
+	for _, c := range disabled {
+		ps.disabled[c] = true
+	}
+	ps.NumDisabled = len(ps.disabled)
+	for _, a := range allow {
+		if strings.HasSuffix(a, "*") {
+			ps.allowPre = append(ps.allowPre, strings.TrimSuffix(a, "*"))
+		} else {
+			ps.allowExa[a] = true
+		}
+	}
+	ps.NumAllowed = len(ps.allowExa) + len(ps.allowPre)
+	return ps
+}
+
+// allowed reports whether the operator listed this bare (query-less, raw) path as never to be flagged.
+func (ps *ProbeSettings) allowed(bare string) bool {
+	if ps == nil {
+		return false
+	}
+	if ps.allowExa[bare] {
+		return true
+	}
+	for _, pre := range ps.allowPre {
+		if strings.HasPrefix(bare, pre) {
+			return true
+		}
+	}
+	return false
+}
+
+func (ps *ProbeSettings) off(label string) bool { return ps != nil && ps.disabled[label] }
+
+// matchProbePathWith reports which probe pattern (if any) the request path matches, under the operator's settings (nil: every
+// category on, nothing allowed): a path on the never-ban list is never flagged
+// (matched on the raw path, query ignored, never on the decoded form), and a switched-off category is skipped.
+// Matching is otherwise on both the raw and the percent-decoded form so %2e%67it style evasion doesn't slip through.
+func matchProbePathWith(path string, ps *ProbeSettings) (string, bool) {
 	bare := path
 	if i := strings.IndexByte(bare, '?'); i >= 0 {
 		bare = bare[:i]
 	}
 	if _, ok := knownLegitimatePaths[bare]; ok {
+		return "", false
+	}
+	if ps.allowed(bare) {
 		return "", false
 	}
 	forms := []string{path}
@@ -87,6 +236,9 @@ func matchProbePath(path string) (string, bool) {
 	}
 	for _, f := range forms {
 		for _, p := range probePatterns {
+			if ps.off(p.label) {
+				continue
+			}
 			if p.re.MatchString(f) {
 				return p.label, true
 			}
@@ -113,6 +265,8 @@ type Tailer struct {
 	cfg     Config
 	onEvent func(Candidate)
 
+	probes atomic.Pointer[ProbeSettings] // operator's category switches and never-ban paths; swapped live by SetProbeSettings
+
 	mu      sync.Mutex
 	windows map[string][]time.Time // ip -> timestamps of recent noisy statuses, for the sliding window
 
@@ -122,11 +276,17 @@ type Tailer struct {
 	candidates atomic.Int64
 }
 
+// SetProbeSettings replaces the operator's probe settings. It is safe to call while the tailer runs; the next log line
+// is judged under the new settings, so a change on the settings page needs no restart.
+func (t *Tailer) SetProbeSettings(ps *ProbeSettings) { t.probes.Store(ps) }
+
 const heartbeatEvery = 30 * time.Minute
 
 func New(cfg Config, onEvent func(Candidate)) *Tailer {
 	if cfg.PollInterval == 0 {
-		cfg.PollInterval = 2 * time.Second
+		// Half a second: a sweep of 54 paths lasts about four seconds, so the old 2 s poll alone let most of it through before
+		// the first request was even read. Reading the end of a file that has not grown costs next to nothing.
+		cfg.PollInterval = 500 * time.Millisecond
 	}
 	return &Tailer{
 		cfg:     cfg,
@@ -234,7 +394,7 @@ func (t *Tailer) handleLine(line string) {
 	}
 
 	if req := reqRe.FindStringSubmatch(line); req != nil {
-		if label, ok := matchProbePath(req[2]); ok {
+		if label, ok := matchProbePathWith(req[2], t.probes.Load()); ok {
 			path := req[2]
 			if len(path) > 60 {
 				path = path[:60] + "..."

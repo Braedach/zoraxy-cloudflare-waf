@@ -1,8 +1,11 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/Braedach/zoraxy-cloudflare-waf/internal/logtail"
 )
 
 func TestValidIPListName(t *testing.T) {
@@ -72,5 +75,62 @@ func TestDefaultsGiveExpiryAndKeepZoraxyBanOff(t *testing.T) {
 	c := defaultConfig()
 	if c.BlockExpiryDays != 14 || c.ZoraxyBanEnabled || len(c.ZoraxyAccessRules) != 1 || c.ZoraxyAccessRules[0] != "default" {
 		t.Errorf("unexpected defaults: %+v", c)
+	}
+}
+
+func TestConfig_MissingProbeSettingsMeansEverythingOn(t *testing.T) {
+	// A config file written by v0.3.5 or earlier has neither field.
+	dir := t.TempDir()
+	path := dir + "/cloudflarewaf.json"
+	if err := os.WriteFile(path, []byte(`{"enabled": false, "dry_run": true, "ratelimit_threshold": 30}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := loadConfigStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := cs.get()
+	if len(c.ProbeDisabledCategories) != 0 || len(c.ProbeAllowPaths) != 0 {
+		t.Fatalf("old config must load with every category on and nothing allowed, got %v / %v", c.ProbeDisabledCategories, c.ProbeAllowPaths)
+	}
+	d, a, err := logtail.NormaliseProbeSettings(c.ProbeDisabledCategories, c.ProbeAllowPaths)
+	if err != nil || len(d) != 0 || len(a) != 0 {
+		t.Fatalf("old config must validate: %v %v %v", d, a, err)
+	}
+}
+
+func TestConfig_ProbeSettingsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/cloudflarewaf.json"
+	cs, err := loadConfigStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := cs.get()
+	c.ProbeDisabledCategories = []string{"ci-config"}
+	c.ProbeAllowPaths = []string{"/myapp/*", "/types/credentials.json"}
+	if err := cs.set(c); err != nil {
+		t.Fatal(err)
+	}
+	cs2, err := loadConfigStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cs2.get()
+	if strings.Join(got.ProbeDisabledCategories, ",") != "ci-config" || strings.Join(got.ProbeAllowPaths, ",") != "/myapp/*,/types/credentials.json" {
+		t.Errorf("settings did not survive a save and reload: %v / %v", got.ProbeDisabledCategories, got.ProbeAllowPaths)
+	}
+}
+
+// The settings page lists the probe categories itself; this keeps that list and the detector's in step.
+func TestSettingsPage_ListsEveryProbeCategory(t *testing.T) {
+	page, err := wwwFS.ReadFile("www/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range logtail.ProbeCategories() {
+		if !strings.Contains(string(page), `id: "`+c+`"`) {
+			t.Errorf("settings page has no switch for probe category %q", c)
+		}
 	}
 }
