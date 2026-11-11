@@ -5,7 +5,7 @@ refused. It is the **reporting** half of the setup: the plugin in this repositor
 what the proxy saw. Read-only: it never changes Zoraxy, the plugin or Cloudflare, and never reads the plugin's configuration file
 (which holds an API token).
 
-Version 2.11.0. MIT licence, like the rest of the repository.
+Version 2.12.0. MIT licence, like the rest of the repository.
 
 ## What the report contains
 
@@ -19,12 +19,13 @@ Version 2.11.0. MIT licence, like the rest of the repository.
 | Blocks by Zoraxy layer, per day | **Counts** of exploit-blocked, whitelist and blacklist refusals. The raw sections are filtered views and understate these. |
 | Blocked clients | One row per refused client with its counts per layer, main target, first and last time. A 170-request scanner burst is one row, not 170 lines. |
 | Exploit and probe attempts | The first and last 30 matching lines; the log has the rest. |
+| Request bursts from external addresses | One row per outside address that sent 20 or more requests in 10 seconds, **whatever Zoraxy did with them**: requests in the busiest window, when, how many were proxied and how many refused, distinct paths, how many look like probes, main target and commonest status. A scripted sweep that Zoraxy served and proxied appears in no attack table above (those list only refused requests); here it is one row. Ordered by probe-like paths, then size; a browser loading a page is a burst with few probe-like paths. |
 
 The script also writes `platform-status-<timestamp>.txt` for **you only**: TLS certificate expiry, when each certificate was last renewed and the
 last 30 days' successful renewals (with the last week's failures), Zoraxy restarts, the WAF plugin's health (process and binary hash, version, ban record,
-bans this month by source and detector, expiry actions, errors, last heartbeat), gaps in the uptime checker (a long gap is printed as one range), and the
+bans this month by source and detector, expiry actions, errors, last heartbeat, and how many times Zoraxy stopped the plugin, counted apart from real crashes: the weekly update and reboots log a "fatal error ... signal: terminated" line for each plugin, which is the shutdown signal and not a fault), gaps in the uptime checker (a long gap is printed as one range), and the
 **monitored-target outages**: each period this month in which Zoraxy's uptime monitor saw a proxied target offline for ten minutes or more, with when it
-went offline, when it came back and for how long. The outage list explains the checker gaps: the checker goes silent while monitored hosts are offline,
+went offline, when it came back and for how long. An outage that began before the first event of the month is traced back through the previous month's journal, so its start is true, not the start of the month. The outage list explains the checker gaps: the checker goes silent while monitored hosts are offline,
 so a silent checker does not mean Zoraxy was down. It is a separate file on purpose, so the report can be shared without it.
 
 ## Install
@@ -37,6 +38,7 @@ mkdir -p /srv/zoraxy/reports && chmod 700 /srv/zoraxy/reports
 ```
 
 Run it by hand first: `sudo /usr/local/bin/forensic-report.sh`. With `EMAIL_TO` unset nothing is mailed; the two files are left in the reports directory.
+To re-run a past month without mailing it or touching your live reports: `FORENSIC_MONTH=2026-10 EMAIL_TO= REPORT_DIR=/tmp/fr /usr/local/bin/forensic-report.sh`.
 
 Requirements: bash, GNU grep with `-P`, awk, sed and coreutils. Optional: `journalctl` and `openssl` for the platform status, and a
 sendmail-compatible mailer if you want it mailed. Debian and Ubuntu have all of these.
@@ -58,6 +60,10 @@ Everything is an optional environment variable. Nothing is hard-coded to one sit
 | `UPTIME_PER_DAY` | `576` | Uptime checks you expect per day, for the platform-status gap check |
 | `PLUGIN_DIR` | `$ZORAXY_DIR/plugins/com.braedach.zoraxy.cloudflarewaf` | The plugin's folder |
 | `OFFLINE_MIN_MINUTES` | `10` | Shortest target outage listed in the platform status's outage section |
+| `FORENSIC_MONTH` | the current month | Month to report, `YYYY-MM`. A past month reads that month's log and limits every journal query to it, so it can be re-run safely |
+| `BURST_MIN_REQUESTS` | `20` | Requests from one outside address that make a burst |
+| `BURST_WINDOW_SECONDS` | `10` | The window they must fall in |
+| `BURST_PROBE_RE` | built in | Extended regex for "probe-like" request paths in the burst section |
 
 ## Reading it correctly
 
