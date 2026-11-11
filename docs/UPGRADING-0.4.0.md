@@ -17,12 +17,11 @@ is **partial** and names the account). If you use only Cloudflare Account 1, **n
 
 ### 2. Better detection of scanners
 
-Chosen from seven months of real access logs from the maintainer's proxy (about 1,600 distinct external addresses, of which roughly 270 behaved as scanners and made over half of all external requests):
+Chosen from seven months of real access logs from the maintainer's proxy (about 1,600 distinct external addresses, roughly 270 of which behaved as scanners):
 
 - **Three new families of paths that only scanners ask for**, each with its own switch: *known exploit endpoints* (PHPUnit, Laravel Ignition, Yii debug, laravel-filemanager, a WordPress plugin hole,
   scanner "-notfound" canary paths), *PHP diagnostics pages* (`phpinfo` and friends) and *hosting-panel and debug endpoints* (cPanel proxy paths, `/server-status`, `/_profiler`,
-  `/telescope/requests`, `/trace.axd`, `/@vite/env`). **Coverage:** 14 of those scanners are caught only by these families; 11 of them were never banned before (they stayed under the
-  30-error threshold) and 3 were banned only at their 30th request.
+  `/telescope/requests`, `/trace.axd`, `/@vite/env`). **Coverage: the quiet scanners.** A scanner that stays under the error threshold, such as a short sweep of known exploit paths, never produces 30 errors in a minute; these families ban it on the first request.
 - **Two more families from v0.3.5**: AI-coding-agent configuration (`/.claude`, `/.cursor`, `/.mcp.json`) and CI definitions (`/.github/`, `/.gitlab/`, `/.circleci/`, ...), matched at the site root
   only so that a git forge showing a repository is not affected.
 - **You decide.** The settings page has one tick box per family and a **never-ban list** (exact paths, or a prefix such as `/myapp/*`). Changes apply when you press Save, with no restart. A
@@ -121,7 +120,7 @@ Built in small steps with a test for each behaviour, then exercised on a throwaw
   foreign rule is never edited; dry run makes no Cloudflare call; expiry per list; bad input rejected; tokens redacted in logs), the detection work adds tests for every new family at three response
   statuses, ordinary paths that must never be flagged, each switch, the never-ban list (exact, prefix, encoded and case variants), validation of what an operator may enter, live reload, a settings
   file that must not gain keys, and that the settings page lists every family. Deliberately breaking the switch or never-ban code makes these tests fail.
-- **Real traffic replay.** 48,867 real external requests (seven months, one proxy) were replayed through the detector: 14 scanners are caught only by the new families, none of them looks like an ordinary
+- **Real traffic replay.** 48,867 real external requests (seven months, one proxy) were replayed through the detector: 14 sweeps in that data are caught only by the new families, none of them looks like an ordinary
   visitor, and the cost per log line is the same with and without the new settings.
 - **End to end on a test bench** (a throwaway Zoraxy running the real plugin against a **simulated** Cloudflare with three accounts and four domains): all accounts blocked from one request; one account
   returning 403 (partial, then recovered on the next block); a foreign rule with the plugin's rule name (left alone, the others protected); an account already at its one-list limit (error 10019, named);
