@@ -29,6 +29,10 @@ func TestProbePaths_Flagged_RegardlessOfStatus(t *testing.T) {
 		"/.aws/credentials", "/.docker/config.json", "/.kube/config", "/.ssh/id_rsa",
 		"/.config/gcloud/application_default_credentials.json", "/.anthropic/config.json", "/.vscode/sftp.json",
 		"/.netrc", "/.npmrc", "/.pypirc", "/.htpasswd", "/.bash_history", "/.DS_Store",
+		"/.boto", "/.s3cfg", "/.amplifyrc",
+		"/.claude/settings.json", "/.claude/settings.local.json", "/.claude.json", "/.cursor/mcp.json", "/.cursor/", "/.mcp.json",
+		"/.github/workflows/ci.yml", "/.github/", "/.gitlab/ci", "/.circleci/config.yml", "/.gitlab-ci.yml", "/.travis.yml",
+		"/%2eclaude/settings.json", "/.claude/settings.json?x=1",
 		"/credentials.json", "/gcp-credentials.json", "/google-credentials.json", "/client_secret.json",
 		"/service-account.json", "/serviceaccount.yaml", "/id_rsa", "/id_ed25519",
 		"/%2e%67it/config",     // percent-encoded ".git"
@@ -56,7 +60,11 @@ func TestProbePaths_LegitimatePathsAreNeverFlagged(t *testing.T) {
 		"/", "/index.html", "/api/items?filter=1", "/login", "/static/app.js", "/favicon.ico", "/robots.txt",
 		"/.well-known/webfinger?resource=acct:a@b", "/.well-known/nodeinfo", "/.well-known/acme-challenge/abc123",
 		"/.well-known/security.txt", "/.well-known/matrix/server",
-		"/.gitignore", "/.github/workflows/ci.yml", "/.gitattributes",
+		"/.gitignore", "/.gitattributes", "/.gitlab-ci", "/claude/settings.json", "/cursor/mcp.json", "/github/workflows",
+		"/owner/repo/src/branch/main/.github/workflows/ci.yml", "/group/project/-/blob/main/.gitlab-ci.yml",
+		"/o/r/raw/branch/main/.claude/settings.json", "/o/r/src/branch/main/.cursor/rules/x.mdc", "/o/r/blob/main/.mcp.json",
+		"/o/r/src/branch/main/.boto", "/o/r/tree/main/.circleci/config.yml", // a git forge showing a repository: not a scanner
+		"/.claudeish", "/.cursorrules-doc", "/mcp.json", "/.githubusercontent", "/s3cfg", "/.boto3",
 		"/environment", "/.environment", "/.envrc", "/app.env.js",
 		"/config.json", "/manifest.json", "/package.json",
 		"/phpinfo.php", "/wp-login.php", "/xmlrpc.php", // deliberately not covered - see probePatterns

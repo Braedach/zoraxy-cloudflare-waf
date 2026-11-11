@@ -7,8 +7,10 @@ record every request, so the tests can assert not only what the plugin sends but
 gofmt -l .                          # must print nothing
 go vet ./...
 go test -race -count=1 ./...        # the race detector matters: detectors submit concurrently
-go test -race -count=1 -v ./... | grep -c '^--- PASS'   # 71 at v0.3.3 and v0.3.4 (63 at v0.3.2)
+go test -race -count=1 -v ./... | grep -c '^--- PASS'   # 71 at v0.3.3, v0.3.4 and v0.3.5 (63 at v0.3.2)
 ```
+
+**Result at v0.3.5 (11 November 2026, Go 1.24):** 71 passed, 0 failed, race detector clean, `gofmt` and `go vet` clean. The count is unchanged: v0.3.5 extends the existing probe tests (17 new flagged paths at three response statuses, and root-anchoring cases for forge-style URLs) without adding test functions; the new cases fail against the code without the change.
 
 **Result at v0.3.4 (26 October 2026, Go 1.24, clean checkout):** 71 passed, 0 failed, race detector clean, `gofmt` and `go vet` clean. The count is unchanged from v0.3.3: v0.3.4 changes the settings-page help text and documentation only. (At v0.3.2: 63 passed; the 8 tests added in v0.3.3 cover the action history.)
 Release binaries for v0.3.1 and v0.3.2 also rebuild byte-for-byte identical to the published files, and v0.3.3 and v0.3.4 were each built twice from clean checkouts with identical results (see the README, "Verifying a release").

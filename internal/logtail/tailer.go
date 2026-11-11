@@ -44,7 +44,7 @@ var (
 // counts (seen in practice: about half the scanners hitting a real deployment were invisible to the threshold rule).
 //
 // The set is deliberately narrow - VCS metadata, dotenv, cloud/tooling credential directories, credential
-// dotfiles, credential-named files and SSH keys - things with no legitimate reason to be requested over
+// dotfiles, AI-agent and CI configuration, credential-named files and SSH keys - things with no legitimate reason to be requested over
 // HTTP. Deliberately NOT included: bare .php, phpinfo, wp-*, config.json, .zip/.bak/.sql: legitimate
 // sites use those, and a false positive here means an operator locked out of their own site.
 // /.well-known/ (ACME, webfinger, nodeinfo, security.txt) never matches any of these.
@@ -56,6 +56,16 @@ var probePatterns = []struct {
 	{"dotenv", regexp.MustCompile(`(?i)/\.env(?:[^a-z]|$)`)},
 	{"tool-or-cloud-dir", regexp.MustCompile(`(?i)/\.(aws|docker|kube|ssh|azure|gcloud|config|anthropic|vscode|idea)(/|$|\?)`)},
 	{"credential-dotfile", regexp.MustCompile(`(?i)/\.(netrc|npmrc|pypirc|htpasswd|htaccess|bash_history|ds_store)(?:[^a-z0-9_]|$)`)},
+	// AI-coding-agent configuration (settings, MCP server definitions and the credentials inside them), CI pipeline
+	// definitions and three more credential dotfiles. Sweeps for these appeared in November 2026; no site serves
+	// them on purpose. ANCHORED TO THE SITE ROOT (^/): a git forge (Gitea, Forgejo, GitLab, cgit...) shows a repository's
+	// own .github/, .claude/ or .gitlab-ci.yml at /owner/repo/src/branch/main/.github/..., and a person reading code
+	// there is not a scanner. Scanners ask at the root. (The older families above are not anchored.)
+	{"agent-config", regexp.MustCompile(`(?i)^/\.(claude|cursor)(/|$|\?|\.json)`)},
+	{"agent-config", regexp.MustCompile(`(?i)^/\.mcp\.json(?:\?|$)`)},
+	{"ci-config", regexp.MustCompile(`(?i)^/\.(github|gitlab|circleci)(/|$|\?)`)},
+	{"ci-config", regexp.MustCompile(`(?i)^/\.(gitlab-ci|travis)\.ya?ml(?:\?|$)`)},
+	{"credential-dotfile", regexp.MustCompile(`(?i)^/\.(boto|s3cfg|amplifyrc)(?:[^a-z0-9_]|$)`)},
 	{"credential-file", regexp.MustCompile(`(?i)/[^/?]*(credentials|client_secret|service[-_]?account|application_default_credentials)[^/?]*\.(json|xml|db|ya?ml)(?:\?|$)`)},
 	{"ssh-key", regexp.MustCompile(`(?i)/id_(rsa|ed25519|ecdsa)(?:[^a-z0-9]|$)`)},
 }
