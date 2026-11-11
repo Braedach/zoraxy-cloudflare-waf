@@ -1,0 +1,29 @@
+{
+ "accounts": {
+  "aaaaaaaaaaaaaaaa1111": {
+   "zones": [
+    "zoneprimary000000001",
+    "zoneprimary000000002"
+   ],
+   "list_quota": 1,
+   "rule_slots": 5,
+   "token": "TOKEN-AAAA"
+  },
+  "bbbbbbbbbbbbbbbb2222": {
+   "zones": [
+    "zonesecond000000001"
+   ],
+   "list_quota": 1,
+   "rule_slots": 5,
+   "token": "TOKEN-BBBB"
+  },
+  "cccccccccccccccc3333": {
+   "zones": [
+    "zonethird0000000001"
+   ],
+   "list_quota": 1,
+   "rule_slots": 5,
+   "token": "TOKEN-CCCC"
+  }
+ }
+}
