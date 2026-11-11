@@ -10,8 +10,9 @@ blocks expire automatically.
 
 - **What it is:** a Zoraxy plugin that turns scanner behaviour in Zoraxy's own access log into automatic bans at Cloudflare's edge, with an optional second layer in Zoraxy's blacklist. Bans expire; it ships in dry-run.
 - **Who it is for:** anyone publishing services through Zoraxy and Cloudflare (the Free plan is enough) who wants scanners stopped in seconds without hand-copying addresses.
-- **Status:** v0.3.4, running in production since 21 September 2026, 71 tests, reproducible release builds. In October to the 25th it banned 107 distinct addresses.
-- **New in v0.3.4:** the settings page's "How this works" text is corrected and completed (dry run covers both layers, the cooldown, Zoraxy-only mode, the full list of scanner paths, history now survives restarts). Since v0.3.3 the Recent actions table survives restarts (`zoraxy_actions.jsonl`). Docs: the multi-zone workaround, the 30-minute heartbeat and a weekly report script.
+- **Status:** v0.3.5, running in production since 21 September 2026 (v0.3.5 live on the author's proxy since 11 November 2026), 71 tests, reproducible release builds. In October to the 25th it banned 107 distinct addresses.
+- **New in v0.3.5:** the plugin now also bans, on the first request, clients asking for AI-coding-agent settings (`/.claude…`, `/.cursor…`, `/.mcp.json`), CI definitions (`/.github/`, `/.gitlab/`, `/.circleci/`, `/.gitlab-ci.yml`, `/.travis.yml`) and `.boto`, `.s3cfg`, `.amplifyrc`. These match at the site root only, so a git forge showing a repository is not affected. Detection, expiry and the Cloudflare and Zoraxy calls are otherwise unchanged.
+- **In v0.3.4:** the settings page's "How this works" text is corrected and completed (dry run covers both layers, the cooldown, Zoraxy-only mode, the full list of scanner paths, history now survives restarts). Since v0.3.3 the Recent actions table survives restarts (`zoraxy_actions.jsonl`). Docs: the multi-zone workaround, the 30-minute heartbeat and a weekly report script.
 - **Also in this repository:** [`scripts/forensic-report.sh`](scripts/README.md), a read-only weekly report of what reached your proxy and what was refused; [a public analysis of six months of real scanner traffic](docs/forensic/README.md); [a guide to reading that report, including when an AI writes the analysis](docs/forensic/REPORT-GUIDE.md).
 - **The story and the reasoning:** [Zoraxy: Reverse Proxy](https://www.braedach.com/zoraxy-reverse-proxy-2/) on the author's blog.
 
@@ -85,7 +86,9 @@ both feed a single decision funnel (`internal/blocker`):
      status*: VCS metadata (`/.git/…`, `/.svn/…`, `/.hg/…`), `/.env`, tool/cloud credential directories
      (`/.aws/`, `/.docker/`, `/.kube/`, `/.ssh/`, `/.azure/`, `/.gcloud/`, `/.config/`, `/.anthropic/`,
      `/.vscode/`, `/.idea/`), credential dotfiles (`.netrc`, `.npmrc`, `.pypirc`, `.htpasswd`, `.htaccess`,
-     `.bash_history`, `.DS_Store`), credential-named files (`credentials.json`, `client_secret.json`,
+     `.bash_history`, `.DS_Store`; at the site root only: `.boto`, `.s3cfg`, `.amplifyrc`), AI-coding-agent configuration (`/.claude…`, `/.cursor…`, `/.mcp.json`) and CI definitions
+     (`/.github/`, `/.gitlab/`, `/.circleci/`, `/.gitlab-ci.yml`, `/.travis.yml`) — these last three groups match **at the site root only**, so a git forge showing a
+     repository (`/owner/repo/src/branch/main/.github/…`) is never flagged — credential-named files (`credentials.json`, `client_secret.json`,
      `service-account.yaml`, …) and SSH keys (`id_rsa`, `id_ed25519`, …). Matching is on the request path only,
      case-insensitive, and also on the percent-decoded path;
    - more than the configured number of **4xx/5xx responses** in the configured window.
@@ -449,6 +452,11 @@ v0.3.0 predates the release build recipe and will not match.
 
 ## Known limits
 
+- **The probe list is fixed, and the plugin and the Cloudflare edge are separate.** If an application you run legitimately serves one of the paths above, the plugin will ban its
+  visitors. Per-category switches and a "never ban these paths" list are planned ([issue #20](https://github.com/Braedach/zoraxy-cloudflare-waf/issues/20)); until then the only
+  exception is the hard-coded n8n path. The older `/.vscode/`, `/.idea/` and `/.config/` patterns match anywhere in the path, so someone reading a repository that contains
+  those folders through a git forge can be flagged; the agent-config and CI families added in v0.3.5 match at the site root only. Any Cloudflare edge rule that blocks the same
+  paths has to be changed separately.
 - **One Cloudflare account and one zone per plugin instance.** The IP list is account-wide, but the plugin creates and maintains the WAF rule in a single zone.
   Several zones behind one Zoraxy are not supported yet (asked for in [issue #5](https://github.com/Braedach/zoraxy-cloudflare-waf/issues/5)).
   **Workaround that works today:** because the IP list is account-wide, add the one-line custom rule `ip.src in $<your_list_name>` by hand in every other zone
@@ -462,7 +470,7 @@ v0.3.0 predates the release build recipe and will not match.
 
 ## Status
 
-**v0.3.4 — working in production** (v0.3.4, 26 October 2026, corrects the settings-page help text only; the persistent action history, new in v0.3.3, was deployed on 21 October 2026; the results below are from v0.3.0 to v0.3.3 unless stated). Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
+**v0.3.5 — working in production** (v0.3.5, 11 November 2026, adds the agent-config and CI probe families, root-anchored; v0.3.4, 26 October 2026, corrected the settings-page help text only; the persistent action history, new in v0.3.3, was deployed on 21 October 2026; the results below are from v0.3.0 to v0.3.3 unless stated). Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
 2026-09-21, the Zoraxy-blacklist layer since 2026-09-22.
 
 - *Production results to 26 October 2026 (v0.3.0 to v0.3.3, Zoraxy 3.3.5 release candidates 2 to 4):* in October to the 25th the plugin banned **107 distinct scanner addresses**

@@ -75,7 +75,10 @@
       <code>/.hg</code>), <code>/.env</code>, tool and cloud folders (<code>/.aws</code>, <code>/.docker</code>, <code>/.kube</code>,
       <code>/.ssh</code>, <code>/.azure</code>, <code>/.gcloud</code>, <code>/.config</code>, <code>/.anthropic</code>, <code>/.vscode</code>,
       <code>/.idea</code>), credential dotfiles (<code>.netrc</code>, <code>.npmrc</code>, <code>.pypirc</code>, <code>.htpasswd</code>,
-      <code>.htaccess</code>, <code>.bash_history</code>, <code>.DS_Store</code>), files named like credentials (<code>credentials.json</code>,
+      <code>.htaccess</code>, <code>.bash_history</code>, <code>.DS_Store</code>), AI-coding-agent and CI configuration at the site root
+      (<code>/.claude</code>, <code>/.cursor</code>, <code>/.mcp.json</code>, <code>/.github/</code>, <code>/.gitlab/</code>, <code>/.circleci/</code>,
+      <code>/.gitlab-ci.yml</code>, <code>/.travis.yml</code>, <code>.boto</code>, <code>.s3cfg</code>, <code>.amplifyrc</code>; a git forge showing a repository is
+      not affected, because these match at the root only), files named like credentials (<code>credentials.json</code>,
       <code>client_secret…</code>, <code>service-account…</code>) and SSH keys (<code>id_rsa</code>, <code>id_ed25519</code>,
       <code>id_ecdsa</code>); or (3) it makes more than the threshold of 4xx/5xx responses within the window (default 30 in 60 seconds; see
       <em>Detection thresholds</em>). Matching is on the request path, ignoring case; <code>/.well-known/</code> never matches.</li>
