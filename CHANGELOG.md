@@ -2,19 +2,31 @@
 
 Versions follow the plugin's own `version_major/minor/patch` (shown in Zoraxy's plugin list).
 
-## 0.4.0-rc2 — unreleased (release candidate, branch `release/0.4.0-rc2`)
-**Why:** v0.4.0 will carry everything below in one release, so it is tested as one build. It adds to rc1 (several Cloudflare accounts and zones, issue #5): the v0.3.5 detection changes, operator control over the scanner-path detector, three more families chosen from real traffic, and a faster log poll. **Not released: needs testing by someone with more than one Cloudflare account.** See `docs/RELEASE-CANDIDATE.md` (install, rollback, mitigation).
-- **Per-family switches and a never-ban list** on the settings page (section *Scanner path detection*), applied on Save with no restart. The new settings (`probe_disabled_categories`, `probe_allow_paths`) are absent from an existing settings file, which means every family on and nothing allowed: the behaviour of earlier versions.
-- **Three new families, each with its own switch**, chosen from seven months of real traffic (about 1,600 external addresses, roughly 270 of them scanners): *exploit-endpoints* (`/vendor/phpunit/`, `/_ignition/`, `/debug/default/`, `/vendor/laravel-filemanager`, `/wp-json/gravitysmtp/`, `…-notfound` canary paths), *php-diagnostics* (`phpinfo.php`, `php-info.php`, `/phpinfo`, `/_profiler/phpinfo`, `/info.php` at the root) and *panel-and-debug* (cPanel/WHM proxy paths, `/server-status`, `/_profiler`, `/telescope/requests`, `/trace.axd`, `/@vite/env`, site root only). **`/phpinfo.php` was on the "never flag" list in earlier versions and is now flagged.** 14 of the scanners in that data are caught only by these families.
-- **Faster log poll:** every 500 ms instead of 2 s. A sweep lasts about four seconds; measured on the bench, a log line becomes a detection in 0.03 to 0.48 s (median 0.23 s). Reading the end of a file that has not grown costs next to nothing.
-- **Behaviour change to know about:** detection is stricter by default (the families above, and the v0.3.5 agent-config and CI families). An application that legitimately serves one of those paths would see its visitors banned: untick the family or add the path to the never-ban list. See *Mitigation* in `docs/RELEASE-CANDIDATE.md`.
-- Includes v0.3.5 (below), which this branch did not have when rc1 was cut.
+## 0.4.0 — unreleased (tested as release candidate rc2; see `docs/UPGRADING-0.4.0.md`)
+**Why:** two things in one release. Issue #5 asked for more than one Cloudflare account and domain. And seven months of real access logs showed where scanner detection could be both earlier and wider. Read `docs/UPGRADING-0.4.0.md` before upgrading: it covers install, **mitigation**, **rollback** and what was tested.
 
-## 0.4.0-rc1 — unreleased (release candidate, branch `feature/multi-target`)
-**Why:** issue #5 asks for more than one Cloudflare zone and account. **Not released: needs testing by someone with more than one account.** See `docs/RELEASE-CANDIDATE.md`.
-- Up to three Cloudflare accounts (tabs *Cloudflare Account 1, 2, 3*), each with its own token, Account ID, list, rule name and block action, and up to five zones per account (fifteen in all).
-- One failing account never stops the others: new result **partial**, with the failing account named in the action detail. Expiry runs per distinct list.
-- Single-account configurations behave exactly as in 0.3.4 and their settings file is not changed; new settings keys appear only when a second account or zone is used.
+**Improvements**
+- **Several Cloudflare accounts and domains.** Up to three accounts (tabs *Cloudflare Account 1, 2, 3*), each with its own token, Account ID, IP list, rule name and block action, and up to five zones (a zone is one domain) per account: fifteen domains in all. One failing account never stops the others: new result **partial**, naming the account. Expiry runs per distinct list. A single-account setup behaves exactly as before and its settings file is not changed.
+- **Three new families of scanner paths, each with its own switch:** known exploit endpoints (PHPUnit, Laravel Ignition, Yii debug, laravel-filemanager, a WordPress plugin hole, scanner "-notfound" canary paths), PHP diagnostics pages (`phpinfo` and friends) and hosting-panel and debug endpoints (cPanel proxy paths, `/server-status`, `/_profiler`, `/telescope/requests`, `/trace.axd`, `/@vite/env`). **`/phpinfo.php`, which earlier versions deliberately ignored, is now flagged.**
+- **Two families from v0.3.5** (below) are included: AI-coding-agent configuration and CI definitions, matched at the site root only.
+- **Operator control.** The settings page has a tick box per family and a **never-ban list** (exact paths, or a prefix such as `/myapp/*`), applied on Save without a restart. A family that is switched off is named in a WARNING line at start-up and on every save. Invalid entries are refused with a message.
+- **Clearer settings page.** "How this works" now begins with Cloudflare's words in plain terms (a zone is a domain; where to find the IDs; how many Zone IDs to enter). It also says exactly when the heartbeat lines appear: `logtail: alive` every 30 minutes always, the hourly `expiry:` line only while live.
+
+**Response time and coverage**
+- **Reaction time:** the log is read every **0.5 s instead of 2 s**. A sweep of about 54 paths lasts about four seconds, so the old poll let most of it through before the first request was read. Measured on a test bench: a request written to the log became a detection in **0.03 to 0.48 s (median 0.23 s)**. The time for Cloudflare to add the address comes on top and was not part of that measurement.
+- **Coverage:** in seven months of real logs from one proxy (about 1,600 external addresses, roughly 270 of which behaved as scanners and made over half of all external requests), 14 scanners are caught only by the new families: 11 were never banned before (they stayed under the 30-error threshold, with 8 to 101 requests each) and 3 were banned only at their 30th request.
+- **Cost:** replaying 143,000 real log lines showed no measurable extra work from the new settings (about 89 microseconds a line with them and 90 without).
+
+**Compatibility (is it breaking?)**
+- Settings, history files and Cloudflare objects: no. An existing `cloudflarewaf.json` loads unchanged; new keys are written only when you use a new feature (a second account or domain, a switch or a never-ban path). Older versions ignore the new keys.
+- Detection is **stricter by default**. If an application you run legitimately serves one of the paths, its visitors would be banned: untick the family or add the path to the never-ban list (see *Mitigation* in the upgrade guide).
+
+**How it was tested (no private data is used or published)**
+- 115 automated tests with the race detector, `gofmt` and `go vet` clean; deliberately breaking the switch or never-ban code makes the new tests fail.
+- 48,867 real external requests were replayed through the detector; every scanner caught only by the new families is a multi-path sweep and none looks like an ordinary visitor.
+- A throwaway Zoraxy running the real plugin against a **simulated** Cloudflare with three accounts and four domains: all accounts blocked, a failing account (partial, then recovered), a same-named foreign rule left alone, the one-list limit reported by account, dry run (no calls made), expiry on every account's list, all new families reaching every account, switches and the never-ban list, upgrade from an old single-account settings file, and the **documented rollback** to v0.3.5 in both variants.
+- The settings page's Save path: the multi-account settings, tokens and labels survive a Save; invalid entries are refused and change nothing; a switch takes effect on the next log line.
+- **Not tested:** real second and third Cloudflare accounts (the simulation follows the same API calls the plugin makes on a real account, but it is not Cloudflare), and arm64, ARMv7 and 386 on real hardware (cross-compiled only).
 
 ## 0.3.5 — 2026-11-11
 **Why this release:** in November scripted sweeps were seen asking for about 54 secrets and configuration paths in roughly 4 seconds, including AI-coding-agent

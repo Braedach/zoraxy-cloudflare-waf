@@ -1,20 +1,16 @@
-# Release candidate v0.4.0-rc2: several Cloudflare accounts and domains, and better scanner detection
+# Upgrading to v0.4.0: several Cloudflare accounts and domains, and better scanner detection
 
-> **RELEASE CANDIDATE: FOR TESTING, NOT FOR PRODUCTION.**
-> This build is provided as-is, without warranty, to be tested by people who need the multi-account feature (issue #5). It has **not** been run against a
-> real second or third Cloudflare account by the maintainer. If you run it on a Zoraxy that protects real sites, you do so at your own risk:
-> a mistake in a block-list tool can block legitimate visitors or leave scanners unblocked. Prefer a spare or test Zoraxy; if you must use your
-> live one, take the backups in "Install" first so you can get back in minutes. It is published as a GitHub **pre-release**, is never offered by the Zoraxy
-> plugin store, and is never the "latest" release.
+This guide covers what v0.4.0 changes, how to install it, how to **mitigate** a problem without going back, how to **roll back**, and what was tested. Read "Is it a breaking change?" first.
 
-v0.4.0 will contain everything below. rc2 replaces rc1: it adds the detection work (sections 2 and 3) to the multi-account feature (section 1), so that one build is tested as a whole.
+> **One honest limit.** The multi-account feature (issue #5) has been exercised end to end against a **simulated** Cloudflare, not against real second and third accounts, because the maintainer has
+> one account. If you use more than one account, start with **Dry run** on and tell us how it went (see "What to try and what to report"). If you use one account, nothing about accounts changes for you.
 
 ## What it adds
 
 ### 1. Several Cloudflare accounts and domains (issue #5)
 
 In Cloudflare a **zone is simply one domain** (for example `example.com`; its subdomains belong to the same zone), and an **account** is a Cloudflare login that can hold many domains.
-This candidate protects up to **three accounts**, each with up to **five zones (domains)**: up to fifteen domains in all. On the settings page the Cloudflare section has three tabs,
+v0.4.0 protects up to **three accounts**, each with up to **five zones (domains)**: up to fifteen domains in all. On the settings page the Cloudflare section has three tabs,
 **Cloudflare Account 1, 2 and 3**. Each tab has its own API token, Account ID, the Zone ID of each of its domains, IP list name, rule name and **block action** (for example
 `block` on one account and `managed_challenge` on another). A blocked address goes to every enabled account and domain. One account failing never stops the others (the result
 is **partial** and names the account). If you use only Cloudflare Account 1, **nothing changes**: same settings, same behaviour, same files.
@@ -66,30 +62,30 @@ Replace the paths with your own. `$PLUGIN_DIR` is the folder Zoraxy keeps this p
 
 1. **Back up first.** The binary, the settings and the plugin's records:
    ```bash
-   cp -p "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf" /root/cloudflarewaf.before-rc2.bin
-   cp -p "$PLUGIN_DIR/cloudflarewaf.json"                /root/cloudflarewaf.before-rc2.json
+   cp -p "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf" /root/cloudflarewaf.before-0.4.0.bin
+   cp -p "$PLUGIN_DIR/cloudflarewaf.json"                /root/cloudflarewaf.before-0.4.0.json
    cp -p "$PLUGIN_DIR/zoraxy_bans.json" "$PLUGIN_DIR/zoraxy_actions.jsonl" /root/ 2>/dev/null
    ```
    The settings file contains your API token: keep the copy private (`chmod 600`) and delete it when you no longer need it.
-2. Download the RC binary for your CPU and the checksum file from the **pre-release** page (not "latest"), and check it:
+2. Download the binary for your CPU and the checksum file from the release page, and check it:
    ```bash
    ARCH=amd64        # or arm64, arm, 386
-   curl -fLO https://github.com/Braedach/zoraxy-cloudflare-waf/releases/download/v0.4.0-rc2/cloudflarewaf-rc2_linux_$ARCH
-   curl -fLO https://github.com/Braedach/zoraxy-cloudflare-waf/releases/download/v0.4.0-rc2/SHA256SUMS
-   sha256sum --ignore-missing -c SHA256SUMS      # must print: cloudflarewaf-rc2_linux_<arch>: OK
+   curl -fLO https://github.com/Braedach/zoraxy-cloudflare-waf/releases/download/v0.4.0/cloudflarewaf_linux_$ARCH
+   curl -fLO https://github.com/Braedach/zoraxy-cloudflare-waf/releases/download/v0.4.0/SHA256SUMS
+   sha256sum --ignore-missing -c SHA256SUMS      # must print: cloudflarewaf_linux_<arch>: OK
    ```
 3. Install it over the old binary by renaming (never copy over a running file):
    ```bash
-   install -m 755 cloudflarewaf-rc2_linux_$ARCH "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf.new"
+   install -m 755 cloudflarewaf_linux_$ARCH "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf.new"
    mv "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf.new" "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf"
    ```
-4. Restart Zoraxy once. The settings page now shows a red **RELEASE CANDIDATE** banner. The plugin list shows version 0.4.0.
+4. Restart Zoraxy once. The plugin list shows version 0.4.0.
 5. Set **Dry run** on first. Fill in Cloudflare Account 1 as before. Open the tab for each further account, tick **Enabled** on that tab, enter its token, Account ID and the Zone ID of
    each of its domains, and press **Test** (it checks every domain separately). Read "How this works" on the page for the details.
 6. Open **Scanner path detection** on the settings page and check the families against what you run. Leave dry run on until the journal shows `would have added to` lines naming every account
    and nothing you recognise as a legitimate visitor. Then switch dry run off.
 
-## Mitigation: if something goes wrong and you want to stay on rc2
+## Mitigation: if something goes wrong and you want to stay on v0.4.0
 
 Everything here takes effect when you press Save; none of it needs a restart.
 
@@ -106,20 +102,20 @@ Everything here takes effect when you press Save; none of it needs a restart.
 
 1. Put the old binary back by renaming, then restart Zoraxy:
    ```bash
-   install -m 755 /root/cloudflarewaf.before-rc2.bin "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf.new"
+   install -m 755 /root/cloudflarewaf.before-0.4.0.bin "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf.new"
    mv "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf.new" "$PLUGIN_DIR/com.braedach.zoraxy.cloudflarewaf"
    ```
-   (No backup? The previous releases are on the releases page; v0.3.5 is the last stable one.)
-2. Optional: restore the settings backup (`cp -p /root/cloudflarewaf.before-rc2.json "$PLUGIN_DIR/cloudflarewaf.json"`). It is not required: older versions ignore the settings they do not know, run as
+   (No backup? The previous releases are on the releases page; v0.3.5 is the previous stable one.)
+2. Optional: restore the settings backup (`cp -p /root/cloudflarewaf.before-0.4.0.json "$PLUGIN_DIR/cloudflarewaf.json"`). It is not required: older versions ignore the settings they do not know, run as
    a single account, and leave the new keys in the file untouched until you press Save on their settings page (that Save would drop the extra accounts and the switches; keep your backup).
-3. What the RC left behind in **additional** accounts is not removed automatically: one IP list and one custom rule per domain, both named as you configured them (default list
+3. What v0.4.0 left behind in **additional** accounts is not removed automatically: one IP list and one custom rule per domain, both named as you configured them (default list
    `zoraxy_cf_waf_blocklist`, rule `Zoraxy CF WAF Sync - managed IP blocklist`). Delete the rule first, then the list, in the Cloudflare dashboard if you do not want them. Entries those accounts
    already hold are **not** expired once you are back on v0.3.x (older versions only manage Cloudflare Account 1), so remove them by hand as well, or leave them: they only block the addresses they list.
-4. Detection goes back to the earlier version's list of paths, so a path that rc2 banned and the old version ignores is no longer banned.
+4. Detection goes back to the earlier version's list of paths, so a path that v0.4.0 banned and the old version ignores is no longer banned.
 
 ## What was tested, and what was not
 
-Built in small steps with a test for each behaviour, then exercised on a throwaway Zoraxy before this candidate was cut. No private data is in this document or in the repository: figures are aggregates and test addresses are from the documentation ranges.
+Built in small steps with a test for each behaviour, then exercised on a throwaway Zoraxy as release candidate rc2 before it became v0.4.0. No private data is in this document or in the repository: figures are aggregates and test addresses are from the documentation ranges.
 
 - **Automated tests: 115, all passing with the race detector**, `gofmt` and `go vet` clean. Beyond the multi-account tests (every account and domain blocked; one failing account gives *partial*; a same-named
   foreign rule is never edited; dry run makes no Cloudflare call; expiry per list; bad input rejected; tokens redacted in logs), the detection work adds tests for every new family at three response
@@ -130,13 +126,13 @@ Built in small steps with a test for each behaviour, then exercised on a throwaw
 - **End to end on a test bench** (a throwaway Zoraxy running the real plugin against a **simulated** Cloudflare with three accounts and four domains): all accounts blocked from one request; one account
   returning 403 (partial, then recovered on the next block); a foreign rule with the plugin's rule name (left alone, the others protected); an account already at its one-list limit (error 10019, named);
   dry run (no calls made); 14-day expiry on every account's list; all new families reaching every account; a family switched off and a never-ban path honoured; an upgrade from an old single-account settings
-  file (no new keys beyond the usual defaults); the **documented rollback** to v0.3.5, both keeping the RC's settings file and restoring the old one (the old version started, read the history, re-used the existing
+  file (no new keys beyond the usual defaults); the **documented rollback** to v0.3.5, both keeping the new settings file and restoring the old one (the old version started, read the history, re-used the existing
   list and rule without duplicating them, and blocked new addresses on account 1).
 - **The settings page and its Save path** were driven as the page does it: the multi-account settings, tokens and labels survive a Save; the new settings persist, invalid entries are refused with a message
   and change nothing, and switching a family off or on takes effect on the next log line.
 - **Not tested: real second and third Cloudflare accounts.** The simulated Cloudflare follows the same API calls the plugin already makes on a real account (verified daily on the maintainer's single
-  account), but it is not Cloudflare. That is exactly why this candidate needs your feedback before it can become a release.
-- **Not tested: arm64, ARMv7 and 386 on real hardware** (cross-compiled only), and a production proxy running the release candidate.
+  account), but it is not Cloudflare. Please report how it goes for you.
+- **Not tested: arm64, ARMv7 and 386 on real hardware** (cross-compiled only).
 - Known behaviour: if one account is down when an address is blocked, that account does not get a retry for that address until the re-block cooldown (default 24 hours) passes; the other accounts hold it meanwhile.
 
 ## What to try and what to report
