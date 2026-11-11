@@ -130,6 +130,7 @@ Built in small steps with a test for each behaviour, then exercised on a throwaw
   list and rule without duplicating them, and blocked new addresses on account 1).
 - **The settings page and its Save path** were driven as the page does it: the multi-account settings, tokens and labels survive a Save; the new settings persist, invalid entries are refused with a message
   and change nothing, and switching a family off or on takes effect on the next log line.
+- **Proof of upgrade in production.** On 11 November 2026 the maintainer upgraded their own production proxy from v0.3.5 to v0.4.0 (the tested release candidate rc2) following this guide, with the previous binary and settings kept as the rollback. All 35 proxied host names and aliases (10 of them aliases) returned the same status as before, none slower than a second; the 39 existing bans and 148 history entries were restored; the new families were seen detecting live in the journal; no errors.
 - **Not tested: real second and third Cloudflare accounts.** The simulated Cloudflare follows the same API calls the plugin already makes on a real account (verified daily on the maintainer's single
   account), but it is not Cloudflare. Please report how it goes for you.
 - **Not tested: arm64, ARMv7 and 386 on real hardware** (cross-compiled only).
