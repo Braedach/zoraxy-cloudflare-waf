@@ -81,14 +81,140 @@ var knownLegitimatePaths = map[string]string{
 	"/types/credentials.json": "n8n",
 }
 
-// matchProbePath reports which probe pattern (if any) the request path matches, checking both the raw
-// and the percent-decoded form so %2e%67it style evasion doesn't slip through.
-func matchProbePath(path string) (string, bool) {
+// ProbeSettings is the operator's say over the sensitive-path probes: which categories are switched off and which
+// request paths must never be flagged. The zero value (and nil) means every category on and nothing allowed, which is
+// exactly how the plugin behaved before these settings existed.
+type ProbeSettings struct {
+	disabled map[string]bool // category label -> off
+	allowExa map[string]bool // exact raw paths (query ignored)
+	allowPre []string        // raw path prefixes (entries written with a trailing *)
+	// Counts for the startup/summary line.
+	NumDisabled, NumAllowed int
+}
+
+// Limits on what an operator can enter, so a typo cannot disable detection wholesale or bloat the config.
+const (
+	maxProbeAllowEntries = 100
+	maxProbeAllowLen     = 200
+)
+
+// ProbeCategories returns the category labels in a stable order (the label shown in a ban reason, e.g.
+// "sensitive-path probe (vcs)"). The settings page and the validation both use this list.
+func ProbeCategories() []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range probePatterns {
+		if !seen[p.label] {
+			seen[p.label] = true
+			out = append(out, p.label)
+		}
+	}
+	return out
+}
+
+// NormaliseProbeSettings validates and tidies what the operator entered: unknown categories are an error (a typo
+// must not silently leave a category on), entries are trimmed and de-duplicated, an allow entry must be an absolute
+// path, and a wildcard is allowed only as the final character and never so short that it covers a whole site.
+func NormaliseProbeSettings(disabled, allow []string) (cleanDisabled, cleanAllow []string, err error) {
+	known := map[string]bool{}
+	for _, c := range ProbeCategories() {
+		known[c] = true
+	}
+	seen := map[string]bool{}
+	for _, c := range disabled {
+		c = strings.TrimSpace(c)
+		if c == "" || seen[c] {
+			continue
+		}
+		if !known[c] {
+			return nil, nil, fmt.Errorf("unknown probe category %q (known: %s)", c, strings.Join(ProbeCategories(), ", "))
+		}
+		seen[c] = true
+		cleanDisabled = append(cleanDisabled, c)
+	}
+	seenA := map[string]bool{}
+	for _, a := range allow {
+		a = strings.TrimSpace(a)
+		if a == "" || seenA[a] {
+			continue
+		}
+		if len(a) > maxProbeAllowLen {
+			return nil, nil, fmt.Errorf("never-ban path too long (max %d characters): %.40s...", maxProbeAllowLen, a)
+		}
+		if a[0] != '/' {
+			return nil, nil, fmt.Errorf("never-ban path %q must start with /", a)
+		}
+		for _, r := range a {
+			if r <= ' ' || r == 0x7f || r == '?' || r == '#' {
+				return nil, nil, fmt.Errorf("never-ban path %q may not contain spaces, control characters, ? or # (give the path only, without a query)", a)
+			}
+		}
+		if i := strings.IndexByte(a, '*'); i >= 0 {
+			if i != len(a)-1 {
+				return nil, nil, fmt.Errorf("never-ban path %q: * is only allowed as the last character (a prefix such as /myapp/*)", a)
+			}
+			if len(strings.TrimSuffix(a, "*")) < 2 {
+				return nil, nil, fmt.Errorf("never-ban path %q is too broad: a prefix must name something below the site root, e.g. /myapp/*", a)
+			}
+		}
+		seenA[a] = true
+		cleanAllow = append(cleanAllow, a)
+	}
+	if len(cleanAllow) > maxProbeAllowEntries {
+		return nil, nil, fmt.Errorf("too many never-ban paths (%d, max %d)", len(cleanAllow), maxProbeAllowEntries)
+	}
+	return cleanDisabled, cleanAllow, nil
+}
+
+// NewProbeSettings builds the lookup structure from already-validated lists (see NormaliseProbeSettings).
+func NewProbeSettings(disabled, allow []string) *ProbeSettings {
+	ps := &ProbeSettings{disabled: map[string]bool{}, allowExa: map[string]bool{}}
+	for _, c := range disabled {
+		ps.disabled[c] = true
+	}
+	ps.NumDisabled = len(ps.disabled)
+	for _, a := range allow {
+		if strings.HasSuffix(a, "*") {
+			ps.allowPre = append(ps.allowPre, strings.TrimSuffix(a, "*"))
+		} else {
+			ps.allowExa[a] = true
+		}
+	}
+	ps.NumAllowed = len(ps.allowExa) + len(ps.allowPre)
+	return ps
+}
+
+// allowed reports whether the operator listed this bare (query-less, raw) path as never to be flagged.
+func (ps *ProbeSettings) allowed(bare string) bool {
+	if ps == nil {
+		return false
+	}
+	if ps.allowExa[bare] {
+		return true
+	}
+	for _, pre := range ps.allowPre {
+		if strings.HasPrefix(bare, pre) {
+			return true
+		}
+	}
+	return false
+}
+
+func (ps *ProbeSettings) off(label string) bool { return ps != nil && ps.disabled[label] }
+
+// matchProbePathWith reports which probe pattern (if any) the request path matches, under the operator's settings (nil: every
+// category on, nothing allowed): a path on the never-ban list is never flagged
+// (matched on the raw path, query ignored, never on the decoded form), and a switched-off category is skipped.
+// Matching is otherwise on both the raw and the percent-decoded form so %2e%67it style evasion doesn't slip through.
+func matchProbePathWith(path string, ps *ProbeSettings) (string, bool) {
 	bare := path
 	if i := strings.IndexByte(bare, '?'); i >= 0 {
 		bare = bare[:i]
 	}
 	if _, ok := knownLegitimatePaths[bare]; ok {
+		return "", false
+	}
+	if ps.allowed(bare) {
 		return "", false
 	}
 	forms := []string{path}
@@ -97,6 +223,9 @@ func matchProbePath(path string) (string, bool) {
 	}
 	for _, f := range forms {
 		for _, p := range probePatterns {
+			if ps.off(p.label) {
+				continue
+			}
 			if p.re.MatchString(f) {
 				return p.label, true
 			}
@@ -123,6 +252,8 @@ type Tailer struct {
 	cfg     Config
 	onEvent func(Candidate)
 
+	probes atomic.Pointer[ProbeSettings] // operator's category switches and never-ban paths; swapped live by SetProbeSettings
+
 	mu      sync.Mutex
 	windows map[string][]time.Time // ip -> timestamps of recent noisy statuses, for the sliding window
 
@@ -131,6 +262,10 @@ type Tailer struct {
 	linesRead  atomic.Int64
 	candidates atomic.Int64
 }
+
+// SetProbeSettings replaces the operator's probe settings. It is safe to call while the tailer runs; the next log line
+// is judged under the new settings, so a change on the settings page needs no restart.
+func (t *Tailer) SetProbeSettings(ps *ProbeSettings) { t.probes.Store(ps) }
 
 const heartbeatEvery = 30 * time.Minute
 
@@ -244,7 +379,7 @@ func (t *Tailer) handleLine(line string) {
 	}
 
 	if req := reqRe.FindStringSubmatch(line); req != nil {
-		if label, ok := matchProbePath(req[2]); ok {
+		if label, ok := matchProbePathWith(req[2], t.probes.Load()); ok {
 			path := req[2]
 			if len(path) > 60 {
 				path = path[:60] + "..."

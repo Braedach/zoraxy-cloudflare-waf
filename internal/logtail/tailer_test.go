@@ -159,3 +159,214 @@ func TestKnownLegitimatePaths_LookalikesAreStillFlagged(t *testing.T) {
 		}
 	}
 }
+
+// ---- operator settings: category switches and the never-ban list ----
+
+func collectWith(ps *ProbeSettings, lines ...string) []Candidate {
+	var got []Candidate
+	t := New(Config{WindowSeconds: 60, Threshold: 30}, func(c Candidate) { got = append(got, c) })
+	t.SetProbeSettings(ps)
+	for _, l := range lines {
+		t.handleLine(l)
+	}
+	return got
+}
+
+func mustSettings(t *testing.T, disabled, allow []string) *ProbeSettings {
+	t.Helper()
+	d, a, err := NormaliseProbeSettings(disabled, allow)
+	if err != nil {
+		t.Fatalf("NormaliseProbeSettings(%v, %v): %v", disabled, allow, err)
+	}
+	return NewProbeSettings(d, a)
+}
+
+func TestProbeCategories_ListIsStableAndComplete(t *testing.T) {
+	want := []string{"vcs", "dotenv", "tool-or-cloud-dir", "credential-dotfile", "agent-config", "ci-config", "credential-file", "ssh-key"}
+	got := ProbeCategories()
+	if len(got) != len(want) {
+		t.Fatalf("categories = %v, want %v (the settings page lists these; update both)", got, want)
+	}
+	seen := map[string]bool{}
+	for _, g := range got {
+		seen[g] = true
+	}
+	for _, w := range want {
+		if !seen[w] {
+			t.Errorf("category %q missing from %v", w, got)
+		}
+	}
+}
+
+func TestProbeSettings_NilAndZeroBehaveAsBefore(t *testing.T) {
+	for name, ps := range map[string]*ProbeSettings{"nil": nil, "empty": mustSettings(t, nil, nil)} {
+		for _, p := range []string{"/.git/config", "/.env", "/.docker/config.json", "/.npmrc", "/.claude/settings.json", "/.github/workflows/ci.yml", "/credentials.json", "/id_rsa"} {
+			if got := collectWith(ps, line("203.0.113.9", "UA", "GET", p, 200)); len(got) != 1 {
+				t.Errorf("%s settings: %s should still be flagged, got %d candidates", name, p, len(got))
+			}
+		}
+	}
+}
+
+func TestProbeSettings_DisablingACategorySkipsOnlyThatCategory(t *testing.T) {
+	ps := mustSettings(t, []string{"ci-config", "agent-config"}, nil)
+	for _, p := range []string{"/.github/workflows/ci.yml", "/.gitlab-ci.yml", "/.claude/settings.json", "/.mcp.json"} {
+		if got := collectWith(ps, line("203.0.113.9", "UA", "GET", p, 200)); len(got) != 0 {
+			t.Errorf("%s is in a switched-off category and must not be flagged, got %+v", p, got)
+		}
+	}
+	for _, p := range []string{"/.git/config", "/.env", "/.npmrc", "/.aws/credentials", "/id_rsa", "/credentials.json", "/%2eclaude/x"} {
+		want := 1
+		if p == "/%2eclaude/x" {
+			want = 0 // decoded form is agent-config, which is off
+		}
+		if got := collectWith(ps, line("203.0.113.9", "UA", "GET", p, 200)); len(got) != want {
+			t.Errorf("%s: want %d candidate(s) with only ci-config and agent-config off, got %d", p, want, len(got))
+		}
+	}
+}
+
+func TestProbeSettings_NeverBanListExactAndPrefix(t *testing.T) {
+	ps := mustSettings(t, nil, []string{"/.github/workflows/ci.yml", "/portal/.docker/*", "/.well-known-ish/.env"})
+	allowed := []string{
+		"/.github/workflows/ci.yml", "/.github/workflows/ci.yml?ref=main",
+		"/portal/.docker/config.json", "/portal/.docker/a/b/c",
+	}
+	for _, p := range allowed {
+		if got := collectWith(ps, line("203.0.113.9", "UA", "GET", p, 200)); len(got) != 0 {
+			t.Errorf("%s is on the never-ban list and must not be flagged, got %+v", p, got)
+		}
+	}
+	stillFlagged := []string{
+		"/.github/workflows/ci.yml/extra", // exact entry is not a prefix
+		"/.github/workflows/other.yml",    // a different file
+		"/.GITHUB/workflows/ci.yml",       // matching is on the raw path, case-sensitive
+		"/%2egithub/workflows/ci.yml",     // encoded variant is never allow-listed
+		"/portal/.docker",                 // the prefix needs the slash
+		"/other/.docker/config.json",      // different prefix
+		"/.git/config", "/.env", "/.docker/config.json",
+	}
+	for _, p := range stillFlagged {
+		if got := collectWith(ps, line("203.0.113.9", "UA", "GET", p, 200)); len(got) != 1 {
+			t.Errorf("%s must still be flagged, got %d candidates", p, len(got))
+		}
+	}
+}
+
+func TestProbeSettings_NeverBanDoesNotCoverExploitPatterns(t *testing.T) {
+	ps := mustSettings(t, nil, []string{"/app/*"})
+	for _, p := range []string{"/app/../../etc/passwd", "/app/x?cmd=id", "/app/actuator/env"} {
+		got := collectWith(ps, line("203.0.113.9", "UA", "GET", p, 200))
+		if len(got) != 1 || got[0].Reason != "exploit-pattern-match in request line" {
+			t.Errorf("%s: exploit patterns are outside the never-ban list, got %+v", p, got)
+		}
+	}
+}
+
+func TestProbeSettings_NeverBanDoesNotStopTheErrorThreshold(t *testing.T) {
+	ps := mustSettings(t, nil, []string{"/app/*"})
+	var lines []string
+	for i := 0; i < 30; i++ {
+		lines = append(lines, line("203.0.113.9", "UA", "GET", "/app/missing", 404))
+	}
+	got := collectWith(ps, lines...)
+	if len(got) != 1 || !strings.Contains(got[0].Reason, "4xx/5xx") {
+		t.Errorf("30 errors from one client must still trip the threshold, got %+v", got)
+	}
+}
+
+func TestProbeSettings_LiveReloadTakesEffectOnTheNextLine(t *testing.T) {
+	var got []Candidate
+	tl := New(Config{WindowSeconds: 60, Threshold: 30}, func(c Candidate) { got = append(got, c) })
+	l := line("203.0.113.9", "UA", "GET", "/.github/workflows/ci.yml", 200)
+	tl.handleLine(l)
+	tl.SetProbeSettings(mustSettings(t, []string{"ci-config"}, nil))
+	tl.handleLine(l)
+	tl.SetProbeSettings(mustSettings(t, nil, nil))
+	tl.handleLine(l)
+	if len(got) != 2 {
+		t.Errorf("flagged, switched off, flagged again: want 2 candidates, got %d", len(got))
+	}
+}
+
+func TestProbeSettings_ConcurrentReloadIsRaceFree(t *testing.T) {
+	tl := New(Config{WindowSeconds: 60, Threshold: 1000000}, func(Candidate) {})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 500; i++ {
+			if i%2 == 0 {
+				tl.SetProbeSettings(NewProbeSettings([]string{"vcs"}, []string{"/a/*"}))
+			} else {
+				tl.SetProbeSettings(nil)
+			}
+		}
+	}()
+	for i := 0; i < 500; i++ {
+		tl.handleLine(line("203.0.113.9", "UA", "GET", "/.git/config", 200))
+	}
+	<-done
+}
+
+func TestNormaliseProbeSettings_Validation(t *testing.T) {
+	bad := []struct {
+		name     string
+		disabled []string
+		allow    []string
+	}{
+		{"unknown category", []string{"vcss"}, nil},
+		{"relative path", nil, []string{"myapp/x"}},
+		{"bare wildcard", nil, []string{"/*"}},
+		{"bare star", nil, []string{"*"}},
+		{"slash only prefix", nil, []string{"/*"}},
+		{"wildcard in the middle", nil, []string{"/a/*/b"}},
+		{"query string", nil, []string{"/a?x=1"}},
+		{"fragment", nil, []string{"/a#x"}},
+		{"space", nil, []string{"/a b"}},
+		{"control character", nil, []string{"/a\x00b"}},
+		{"too long", nil, []string{"/" + strings.Repeat("a", maxProbeAllowLen)}},
+	}
+	for _, c := range bad {
+		if _, _, err := NormaliseProbeSettings(c.disabled, c.allow); err == nil {
+			t.Errorf("%s: expected an error", c.name)
+		}
+	}
+	var many []string
+	for i := 0; i <= maxProbeAllowEntries; i++ {
+		many = append(many, fmt.Sprintf("/p%d/x", i))
+	}
+	if _, _, err := NormaliseProbeSettings(nil, many); err == nil {
+		t.Errorf("%d entries should be refused", len(many))
+	}
+
+	d, a, err := NormaliseProbeSettings([]string{" ci-config ", "ci-config", "", "vcs"}, []string{" /a/b ", "/a/b", "", "/c/*"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(d, ",") != "ci-config,vcs" || strings.Join(a, ",") != "/a/b,/c/*" {
+		t.Errorf("trim and de-duplicate failed: %v %v", d, a)
+	}
+	if d, a, err := NormaliseProbeSettings(nil, nil); err != nil || len(d) != 0 || len(a) != 0 {
+		t.Errorf("empty input must be valid and empty: %v %v %v", d, a, err)
+	}
+}
+
+func BenchmarkHandleLine_Probe(b *testing.B) {
+	for name, ps := range map[string]*ProbeSettings{
+		"no-settings":      nil,
+		"4-off-20-allowed": NewProbeSettings([]string{"vcs", "dotenv", "ci-config", "agent-config"}, []string{"/a/*", "/b/*", "/c/*", "/d/*", "/e/*", "/f/*", "/g/*", "/h/*", "/i/*", "/j/*", "/k/x", "/l/x", "/m/x", "/n/x", "/o/x", "/p/x", "/q/x", "/r/x", "/s/x", "/t/x"}),
+	} {
+		for kind, l := range map[string]string{
+			"ordinary": line("203.0.113.9", "Mozilla/5.0", "GET", "/static/app.js", 200),
+			"probe":    line("203.0.113.9", "Mozilla/5.0", "GET", "/.claude/settings.json", 200),
+		} {
+			b.Run(name+"/"+kind, func(b *testing.B) {
+				tl := New(Config{WindowSeconds: 60, Threshold: 1 << 30}, func(Candidate) {})
+				tl.SetProbeSettings(ps)
+				for i := 0; i < b.N; i++ {
+					tl.handleLine(l)
+				}
+			})
+		}
+	}
+}
