@@ -10,8 +10,14 @@ blocks expire automatically.
 
 - **What it is:** a Zoraxy plugin that turns scanner behaviour in Zoraxy's own access log into automatic bans at Cloudflare's edge, with an optional second layer in Zoraxy's blacklist. Bans expire; it ships in dry-run.
 - **Who it is for:** anyone publishing services through Zoraxy and Cloudflare (the Free plan is enough) who wants scanners stopped in seconds without hand-copying addresses.
-- **Status:** v0.3.5, running in production since 21 September 2026 (v0.3.5 live on the author's proxy since 11 November 2026), 71 tests, reproducible release builds. In October to the 25th it banned 107 distinct addresses.
-- **New in v0.3.5:** the plugin now also bans, on the first request, clients asking for AI-coding-agent settings (`/.claude…`, `/.cursor…`, `/.mcp.json`), CI definitions (`/.github/`, `/.gitlab/`, `/.circleci/`, `/.gitlab-ci.yml`, `/.travis.yml`) and `.boto`, `.s3cfg`, `.amplifyrc`. These match at the site root only, so a git forge showing a repository is not affected. Detection, expiry and the Cloudflare and Zoraxy calls are otherwise unchanged.
+- **Status:** v0.4.0 (11 November 2026), running in production since 21 September 2026 (earlier versions), 116 tests, reproducible release builds. In October to the 25th it banned 107 distinct addresses.
+- **New in v0.4.0** (details, mitigation and rollback: [docs/UPGRADING-0.4.0.md](docs/UPGRADING-0.4.0.md)):
+  - **Several Cloudflare accounts and domains:** up to three accounts and fifteen domains (a Cloudflare *zone* is one domain), each account with its own token, list, rule name and block action; one failing account never stops the others. A single-account setup is unchanged.
+  - **Better scanner detection:** three new families (known exploit endpoints, PHP diagnostics pages, hosting-panel and debug endpoints) on top of v0.3.5's; in seven months of real logs, 14 scanners are caught only by these, 11 of which were never banned before.
+  - **Faster:** the log is read every 0.5 s instead of 2 s; a request becomes a detection in 0.03 to 0.48 s (median 0.23 s) on a test bench.
+  - **You decide:** a tick box per family and a never-ban path list on the settings page, applied on Save without a restart. Detection is stricter by default; see the upgrade guide.
+  - **Clearer settings page** (a zone is a domain; exactly when the heartbeat lines appear) and two code-scanning alerts closed (CSRF token sanitised).
+- **In v0.3.5:** the plugin banned, on the first request, clients asking for AI-coding-agent settings (`/.claude…`, `/.cursor…`, `/.mcp.json`), CI definitions (`/.github/`, `/.gitlab/`, `/.circleci/`, `/.gitlab-ci.yml`, `/.travis.yml`) and `.boto`, `.s3cfg`, `.amplifyrc`. These match at the site root only, so a git forge showing a repository is not affected. Detection, expiry and the Cloudflare and Zoraxy calls are otherwise unchanged.
 - **In v0.3.4:** the settings page's "How this works" text is corrected and completed (dry run covers both layers, the cooldown, Zoraxy-only mode, the full list of scanner paths, history now survives restarts). Since v0.3.3 the Recent actions table survives restarts (`zoraxy_actions.jsonl`). Docs: the multi-zone workaround, the 30-minute heartbeat and a weekly report script.
 - **Also in this repository:** [`scripts/forensic-report.sh`](scripts/README.md), a read-only weekly report of what reached your proxy and what was refused; [a public analysis of six months of real scanner traffic](docs/forensic/README.md); [a guide to reading that report, including when an AI writes the analysis](docs/forensic/REPORT-GUIDE.md).
 - **The story and the reasoning:** [Zoraxy: Reverse Proxy](https://www.braedach.com/zoraxy-reverse-proxy-2/) on the author's blog.
@@ -89,15 +95,18 @@ both feed a single decision funnel (`internal/blocker`):
      `.bash_history`, `.DS_Store`; at the site root only: `.boto`, `.s3cfg`, `.amplifyrc`), AI-coding-agent configuration (`/.claude…`, `/.cursor…`, `/.mcp.json`) and CI definitions
      (`/.github/`, `/.gitlab/`, `/.circleci/`, `/.gitlab-ci.yml`, `/.travis.yml`) — these last three groups match **at the site root only**, so a git forge showing a
      repository (`/owner/repo/src/branch/main/.github/…`) is never flagged — credential-named files (`credentials.json`, `client_secret.json`,
-     `service-account.yaml`, …) and SSH keys (`id_rsa`, `id_ed25519`, …). Matching is on the request path only,
+     `service-account.yaml`, …), SSH keys (`id_rsa`, `id_ed25519`, …) and, new in v0.4.0, **known exploit endpoints** (`/vendor/phpunit/…`, `/_ignition/`,
+     `/debug/default/`, `/vendor/laravel-filemanager`, `/wp-json/gravitysmtp/`, scanner `…-notfound` canary paths), **PHP diagnostics pages** (`phpinfo.php`, `php-info.php`, `/phpinfo`,
+     `/_profiler/phpinfo`, `/info.php` at the root) and **hosting-panel and debug endpoints** at the site root (`/___proxy_subdomain_cpanel`, `/server-status`, `/_profiler`,
+     `/telescope/requests`, `/trace.axd`, `/@vite/env`). Each family has its own switch on the settings page, and a never-ban list covers anything else. Matching is on the request path only,
      case-insensitive, and also on the percent-decoded path;
    - more than the configured number of **4xx/5xx responses** in the configured window.
 
    *Why the path probes exist:* single-page apps answer **any** path with `200` and their index page, so a
    scanner sweeping them never produces the errors the threshold counts. On a real 38-hour sample, the
    threshold rule flagged 8 scanner IPs and missed 9 more that the path rules catch (17 in total); none of the
-   other ~140 public IPs in that sample was flagged by them. The set is deliberately narrow: bare `.php`, `phpinfo`, `wp-*`,
-   `config.json`, `.zip`/`.bak`/`.sql` are **not** included, because legitimate sites use them and a false
+   other ~140 public IPs in that sample was flagged by them. The set is deliberately narrow: bare `.php`, `wp-*`,
+   `config.json`, `.zip`/`.bak`/`.sql` are **not** included (`phpinfo` pages are, from v0.4.0, and can be switched off), because legitimate sites use them and a false
    positive locks an operator out of their own site. `/.well-known/` (ACME, webfinger, nodeinfo) never
    matches. One exact-path exception exists, for an application's own front-end file that looks like a probe:
    n8n's `/types/credentials.json` (a static list of credential *types*). It matches the whole path only, so
@@ -198,7 +207,9 @@ account's IP lists and this one zone's WAF rules, nothing else in your Cloudflar
 
 Both the Account ID and Zone ID (for the plugin's own config, separate from the token
 scoping above) are on the zone's **Overview** page in the Cloudflare dashboard, right-hand
-sidebar.
+column (scroll down to **API**). In Cloudflare a **zone is simply one domain** you have added
+(for example `example.com`; its subdomains belong to the same zone), so each domain you protect has its own Zone ID.
+An **account** is your Cloudflare login and can hold many domains.
 
 Paste the token into the plugin's UI, then click **Test Connection** before doing anything
 else — it checks the token is valid and that both scopes actually work (a live, read-only
@@ -248,7 +259,7 @@ Two different settings, easy to mix up:
   `more than N 4xx/5xx responses within Ws`)
   (`blocked`, `partial`, `dry-run`, `expired`, `error`, `skipped-invalid-ip`, `skipped-disabled`, `skipped-list-full`; repeat
   hits for an already-actioned IP are left out of the journal but still appear in the table), and a
-  `logtail: alive` heartbeat every 30 minutes with lines-read / candidates-raised counters and an `expiry:` line every hour. An address already actioned is
+  `logtail: alive` heartbeat every 30 minutes with lines-read / candidates-raised counters and, while live (not in dry run, expiry above 0), an `expiry:` line every hour. An address already actioned is
   skipped (`skipped-duplicate`) until the **re-block cooldown** (default 24 hours, a setting) passes; that is separate from block expiry (default 14 days).
 
 ### Block action
@@ -347,8 +358,8 @@ the CSRF token (injected into the page as `{{.csrfToken}}`) back in an **`X-CSRF
 **The Recent actions table is empty.** From v0.3.3 it is restored from `zoraxy_actions.jsonl` on start, so an empty table means the file is
 missing or unreadable (the journal says why: look for `history:` lines). On v0.3.2 and earlier it was kept in memory only and a restart
 cleared it. Either way nothing is lost: the blocks themselves, the Cloudflare list, the Zoraxy bans and the plugin's own ban record all
-survive a restart. The other durable log is the journal — `journalctl -u zoraxy | grep -F "Zoraxy Cloudflare WAF plugin"` — which also carries a heartbeat every 30 minutes and an
-hourly expiry line, so you can tell "running, nothing to do" from "not running".
+survive a restart. The other durable log is the journal — `journalctl -u zoraxy | grep -F "Zoraxy Cloudflare WAF plugin"` — which also carries a heartbeat every 30 minutes and, while live, an
+hourly expiry line, so you can tell "running, nothing to do" from "not running". (In dry run, or with expiry set to 0, there are no expiry lines; that is normal. If your Zoraxy service is not called `zoraxy`, use its name.)
 
 **Nothing appears in Cloudflare.** Expected until the first real block: the IP list and the WAF rule are created lazily. Until then
 Test Connection is the way to check the credentials. Also make sure **Dry run** is off — in dry run the plugin only logs what it
@@ -402,7 +413,7 @@ Your settings (`cloudflarewaf.json`) and the ban record (`zoraxy_bans.json`) liv
    ```
 
    Expect `enabled=true dry_run=false` once you have gone live. The binary reports its version with `./<binary> -introspect`.
-2. **It is alive.** An hourly `expiry:` line and a `logtail: alive` line (every 30 minutes) appear, with no `error`, `fail` or `panic` lines.
+2. **It is alive.** A `logtail: alive` line (every 30 minutes) and, once live, an hourly `expiry:` line appear, with no `error`, `fail` or `panic` lines.
 3. **The places a ban lives agree.** For the addresses the plugin banned, three counts should match: the Cloudflare IP list (Cloudflare
    dashboard, Manage Account, Configurations, Lists), the plugin's ban record (`python3 -c 'import json; print(len(json.load(open("zoraxy_bans.json"))))'`),
    and the blacklist of each Zoraxy access rule you selected (Zoraxy UI, Access Rules). No private or loopback address should be on the list.
@@ -431,7 +442,7 @@ The plugin creates things in your Cloudflare account and in Zoraxy that it **doe
 
 Every release has a `SHA256SUMS` file; check it as shown in [Setup](#setup). You can also rebuild a release yourself and compare, because the builds
 are reproducible: with the Go 1.24 toolchain, `git checkout vX.Y.Z && ./build.sh release` produced binaries byte-for-byte identical to the published
-`cloudflarewaf_linux_*` files for v0.3.1 and v0.3.2 on all four architectures (checked 21 October 2026). v0.3.3, v0.3.4 and v0.3.5 were each built twice from clean checkouts
+`cloudflarewaf_linux_*` files for v0.3.1 and v0.3.2 on all four architectures (checked 21 October 2026). v0.3.3, v0.3.4, v0.3.5 and v0.4.0 were each built twice from clean checkouts
 of the release commit before publishing, with identical results, and the published files are that build (the commit is embedded in each binary: `go version -m <binary>`).
 v0.3.0 predates the release build recipe and will not match.
 
@@ -452,17 +463,12 @@ v0.3.0 predates the release build recipe and will not match.
 
 ## Known limits
 
-- **The probe list is fixed, and the plugin and the Cloudflare edge are separate.** If an application you run legitimately serves one of the paths above, the plugin will ban its
-  visitors. Per-category switches and a "never ban these paths" list are planned ([issue #20](https://github.com/Braedach/zoraxy-cloudflare-waf/issues/20)); until then the only
-  exception is the hard-coded n8n path. The older `/.vscode/`, `/.idea/` and `/.config/` patterns match anywhere in the path, so someone reading a repository that contains
-  those folders through a git forge can be flagged; the agent-config and CI families added in v0.3.5 match at the site root only. Any Cloudflare edge rule that blocks the same
-  paths has to be changed separately.
-- **One Cloudflare account and one zone per plugin instance.** The IP list is account-wide, but the plugin creates and maintains the WAF rule in a single zone.
-  Several zones behind one Zoraxy are not supported yet (asked for in [issue #5](https://github.com/Braedach/zoraxy-cloudflare-waf/issues/5)).
-  **Workaround that works today:** because the IP list is account-wide, add the one-line custom rule `ip.src in $<your_list_name>` by hand in every other zone
-  of the same account, with the action you prefer (Managed Challenge or Block). The plugin keeps the list current and never edits a rule it did not create,
-  so the two do not interfere. The issue's reporter confirmed the workaround works well; native multi-zone and multi-account support is a possible future enhancement
-  (design and any test build are discussed in the issue). Zones in a *different* Cloudflare account cannot share the list, so the workaround does not cover them.
+- **The plugin and the Cloudflare edge are separate.** The switches and the never-ban list on the settings page change this plugin only. A Cloudflare rule of yours that also blocks a path has to be changed in Cloudflare. If an
+  application you run legitimately serves one of the families' paths, untick the family or add the path to the never-ban list. The older `/.vscode/`, `/.idea/` and `/.config/` patterns match anywhere in the path, so someone
+  reading a repository that contains those folders through a git forge can be flagged; the families added in v0.3.5 and v0.4.0 for agent configuration, CI and panels match at the site root only.
+- **At most three Cloudflare accounts and five domains (zones) per account.** Each account uses one IP list (the Free plan allows one per account) and each domain needs one free custom-rule slot. Multi-account support has been
+  tested against a simulated Cloudflare, not against real second and third accounts; please report how it goes (see [docs/UPGRADING-0.4.0.md](docs/UPGRADING-0.4.0.md)). If one account is down when an address is blocked, that account is not
+  retried for that address until the re-block cooldown (default 24 hours) passes; the others hold it meanwhile.
 - **No manual "unblock this IP" button.** Remove the address from the Cloudflare list and from the Zoraxy access rules by hand (see [Troubleshooting](#troubleshooting)).
 - **The Recent actions table shows the last 200 actions.** From v0.3.3 it is restored from `zoraxy_actions.jsonl` after a restart (on v0.3.2 and earlier it was in memory only and a restart emptied it). The journal remains the other durable record.
 - **Detection is deliberately narrow** (see [How it works](#how-it-works)): a few path families, exploit patterns and error bursts. It is a reflex against scanners, not a full WAF.
@@ -470,7 +476,7 @@ v0.3.0 predates the release build recipe and will not match.
 
 ## Status
 
-**v0.3.5 — working in production** (v0.3.5, 11 November 2026, adds the agent-config and CI probe families, root-anchored; v0.3.4, 26 October 2026, corrected the settings-page help text only; the persistent action history, new in v0.3.3, was deployed on 21 October 2026; the results below are from v0.3.0 to v0.3.3 unless stated). Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
+**v0.4.0 — released 11 November 2026** (adds several accounts and domains, three more scanner-path families, switches and a never-ban list, a 0.5 s poll; v0.3.5, 11 November 2026, added the agent-config and CI probe families, root-anchored; v0.3.4, 26 October 2026, corrected the settings-page help text only; the persistent action history, new in v0.3.3, was deployed on 21 October 2026; the results below are from v0.3.0 to v0.3.3 unless stated). Both layers have been running on a live proxy (Zoraxy behind a Cloudflare tunnel) since
 2026-09-21, the Zoraxy-blacklist layer since 2026-09-22.
 
 - *Production results to 26 October 2026 (v0.3.0 to v0.3.3, Zoraxy 3.3.5 release candidates 2 to 4):* in October to the 25th the plugin banned **107 distinct scanner addresses**
@@ -499,7 +505,7 @@ v0.3.0 predates the release build recipe and will not match.
   read treated as "no rules"; and a non-existent `PATCH …/items` call — items are added with `POST …/items`). The first live
   attempt then hit the account's **list quota** (Cloudflare error 10019) and stopped safely without writing anything else; that
   error is now explained in plain words, and Test Connection shows the account's lists up front.
-- *Tests:* **71 tests in 5 packages, all passing, race detector clean, `gofmt` and `go vet` clean** (v0.3.4, 26 October 2026; v0.3.3 also had 71; v0.3.2 had 63). The Cloudflare and
+- *Tests:* **116 tests in 6 packages, all passing, race detector clean, `gofmt` and `go vet` clean** (v0.4.0, 11 November 2026; v0.3.5, v0.3.4 and v0.3.3 had 71; v0.3.2 had 63). The Cloudflare and
   Zoraxy clients are tested against fake servers that record every request — including that a failed read never leads to a write, that other rules are
   never resent, and that expiry only removes entries this plugin created. No network is needed. What each test proves is in [docs/TESTING.md](docs/TESTING.md).
 

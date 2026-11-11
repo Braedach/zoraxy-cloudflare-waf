@@ -1,8 +1,11 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/Braedach/zoraxy-cloudflare-waf/internal/logtail"
 )
 
 func TestValidIPListName(t *testing.T) {
@@ -72,5 +75,129 @@ func TestDefaultsGiveExpiryAndKeepZoraxyBanOff(t *testing.T) {
 	c := defaultConfig()
 	if c.BlockExpiryDays != 14 || c.ZoraxyBanEnabled || len(c.ZoraxyAccessRules) != 1 || c.ZoraxyAccessRules[0] != "default" {
 		t.Errorf("unexpected defaults: %+v", c)
+	}
+}
+
+func TestConfig_MissingProbeSettingsMeansEverythingOn(t *testing.T) {
+	// A config file written by v0.3.5 or earlier has neither field.
+	dir := t.TempDir()
+	path := dir + "/cloudflarewaf.json"
+	if err := os.WriteFile(path, []byte(`{"enabled": false, "dry_run": true, "ratelimit_threshold": 30}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := loadConfigStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := cs.get()
+	if len(c.ProbeDisabledCategories) != 0 || len(c.ProbeAllowPaths) != 0 {
+		t.Fatalf("old config must load with every category on and nothing allowed, got %v / %v", c.ProbeDisabledCategories, c.ProbeAllowPaths)
+	}
+	d, a, err := logtail.NormaliseProbeSettings(c.ProbeDisabledCategories, c.ProbeAllowPaths)
+	if err != nil || len(d) != 0 || len(a) != 0 {
+		t.Fatalf("old config must validate: %v %v %v", d, a, err)
+	}
+}
+
+func TestConfig_ProbeSettingsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/cloudflarewaf.json"
+	cs, err := loadConfigStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := cs.get()
+	c.ProbeDisabledCategories = []string{"ci-config"}
+	c.ProbeAllowPaths = []string{"/myapp/*", "/types/credentials.json"}
+	if err := cs.set(c); err != nil {
+		t.Fatal(err)
+	}
+	cs2, err := loadConfigStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cs2.get()
+	if strings.Join(got.ProbeDisabledCategories, ",") != "ci-config" || strings.Join(got.ProbeAllowPaths, ",") != "/myapp/*,/types/credentials.json" {
+		t.Errorf("settings did not survive a save and reload: %v / %v", got.ProbeDisabledCategories, got.ProbeAllowPaths)
+	}
+}
+
+// The settings page lists the probe categories itself; this keeps that list and the detector's in step.
+func TestSettingsPage_ListsEveryProbeCategory(t *testing.T) {
+	page, err := wwwFS.ReadFile("www/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range logtail.ProbeCategories() {
+		if !strings.Contains(string(page), `id: "`+c+`"`) {
+			t.Errorf("settings page has no switch for probe category %q", c)
+		}
+	}
+}
+
+// The help must say what a Cloudflare zone is: people who have never used the API do not know it is a domain.
+func TestSettingsPage_ExplainsThatAZoneIsADomain(t *testing.T) {
+	page, err := wwwFS.ReadFile("www/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Zone = a domain.", "Zone ID (the ID of your domain in Cloudflare)", "More domains (zones) in this account"} {
+		if !strings.Contains(string(page), want) {
+			t.Errorf("settings page no longer contains %q", want)
+		}
+	}
+}
+
+// A settings file that does not use the new probe settings must not gain keys when the plugin saves it (the release-candidate
+// documentation promises new keys appear only when a new feature is used).
+func TestConfig_SavingDoesNotAddProbeKeysUnlessUsed(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/cloudflarewaf.json"
+	if err := os.WriteFile(path, []byte(`{"enabled": true, "dry_run": true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := loadConfigStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.set(cs.get()); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	for _, k := range []string{"probe_disabled_categories", "probe_allow_paths", "additional_targets", "extra_zone_ids"} {
+		if strings.Contains(string(raw), k) {
+			t.Errorf("saving an old settings file added the key %q:\n%s", k, raw)
+		}
+	}
+	c := cs.get()
+	c.ProbeAllowPaths = []string{"/a/*"}
+	if err := cs.set(c); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(path)
+	if !strings.Contains(string(raw), "probe_allow_paths") {
+		t.Errorf("a configured never-ban list must be saved:\n%s", raw)
+	}
+}
+
+// The "Where to see what it's doing" help must not promise an expiry line in dry run (PruneExpired does nothing then).
+func TestSettingsPage_ExpiryLineIsOnlyPromisedWhileLive(t *testing.T) {
+	page, err := wwwFS.ReadFile("www/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(page), "only while live") || !strings.Contains(string(page), "there are no\n      \"expiry:\" lines") {
+		t.Errorf("the help must say that expiry: lines appear only while live")
+	}
+}
+
+// Only a release-candidate BUILD (a build label) may call itself one; the page text shipped in a stable release must not.
+func TestSettingsPage_StaticTextDoesNotCallItselfAReleaseCandidate(t *testing.T) {
+	page, err := wwwFS.ReadFile("www/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.ToLower(string(page)), "(release candidate)") {
+		t.Errorf("the settings page contains the fixed text \"(release candidate)\"; that must come only from the build label")
 	}
 }

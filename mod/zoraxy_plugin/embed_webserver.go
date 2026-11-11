@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -49,11 +50,9 @@ func NewPluginEmbedUIRouter(pluginID string, targetFs *embed.FS, targetFsPrefix 
 }
 
 func (p *PluginUiRouter) populateCSRFToken(r *http.Request, fsHandler http.Handler) http.Handler {
-	//Get the CSRF token from header
-	csrfToken := r.Header.Get("X-Zoraxy-Csrf")
-	if csrfToken == "" {
-		csrfToken = "missing-csrf-token"
-	}
+	//Get the CSRF token from header. Local change to the vendored file: the value is written into HTML and into a
+	//JavaScript string, so anything that is not a plain token is replaced (see sanitizeCSRFToken).
+	csrfToken := sanitizeCSRFToken(r.Header.Get("X-Zoraxy-Csrf"))
 
 	//Return the middleware
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -171,4 +170,16 @@ func (p *PluginUiRouter) AttachHandlerToMux(mux *http.ServeMux) {
 
 	p.HandlerPrefix = strings.TrimSuffix(p.HandlerPrefix, "/")
 	mux.Handle(p.HandlerPrefix+"/", p.Handler())
+}
+
+// csrfTokenRe is what a CSRF token looks like: base64 (standard or URL-safe) and a few separators. Nothing that could end a
+// JavaScript string, open an HTML tag or add an attribute is allowed.
+var csrfTokenRe = regexp.MustCompile(`^[A-Za-z0-9+/=_.-]{1,512}$`)
+
+// sanitizeCSRFToken returns the token if it is plain, otherwise the placeholder the page already uses when Zoraxy sends none.
+func sanitizeCSRFToken(t string) string {
+	if csrfTokenRe.MatchString(t) {
+		return t
+	}
+	return "missing-csrf-token"
 }

@@ -12,7 +12,7 @@
   fieldset:disabled { opacity: 0.55; }
   legend { font-weight: 600; padding: 0 0.4rem; }
   label { display: block; margin: 0.6rem 0 0.2rem; font-size: 0.85rem; color: #333; }
-  input[type=text], input[type=password], input[type=number] {
+  input[type=text], input[type=password], input[type=number], textarea {
     width: 100%; max-width: 420px; padding: 0.4rem; box-sizing: border-box;
     border: 1px solid #ccc; border-radius: 4px;
   }
@@ -56,14 +56,39 @@
   details.help h3 { font-size: 0.9rem; margin: 0.9rem 0 0.2rem; }
   details.help ul { margin: 0.3rem 0 0 1.1rem; padding: 0; }
   details.help li { margin-bottom: 0.25rem; }
+  textarea { width: 100%; max-width: 420px; padding: 0.4rem; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; }
+  select { max-width: 420px; padding: 0.35rem; }
+  .tabs { display: flex; gap: 0.4rem; margin: 0.5rem 0 0.8rem; flex-wrap: wrap; }
+  .tabs button { margin-top: 0; background: #888; padding: 0.4rem 0.9rem; }
+  .tabs button.active { background: #f38020; font-weight: 600; }
+  .tabs button .dot { display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; margin-left: 0.4rem; background: #ccc; }
+  .tabs button .dot.on { background: #2e9e57; }
+  .rc { border-width: 2px; }
 </style>
 </head>
 <body>
 <h1>Zoraxy Cloudflare WAF plugin</h1>
 <div class="sub">Mirrors abusive clients from Zoraxy's access log and blacklist events into a Cloudflare IP List.</div>
+<div id="rcBanner" class="banner error rc" style="display:none"></div>
 
 <details class="help">
   <summary>How this works (read this first)</summary>
+
+  <h3>Cloudflare's words, in plain terms</h3>
+  <ul>
+    <li><strong>Zone = a domain.</strong> In Cloudflare a <em>zone</em> is simply one domain you have added to Cloudflare, for example
+      <code>example.com</code>. Its subdomains (<code>www.example.com</code>, <code>blog.example.com</code>) belong to the same zone. If you protect
+      three domains you have three zones, and each one has its own <strong>Zone ID</strong>.</li>
+    <li><strong>Account</strong> = your Cloudflare login (or organisation). One account can hold many domains (zones). The <strong>Account ID</strong> is the
+      same for all of them.</li>
+    <li><strong>Where to find the IDs:</strong> open the domain in the Cloudflare dashboard, go to its <em>Overview</em> page and look in the right-hand column
+      (scroll down to <em>API</em>): the <strong>Zone ID</strong> and the <strong>Account ID</strong> are both there. Each is a 32-character code.</li>
+    <li><strong>What the plugin keeps in Cloudflare:</strong> <em>one IP list per account</em> (the blocked addresses, shared by every domain in that account) and
+      <em>one WAF rule per domain</em> (which blocks the addresses on that list). So "how many zones?" means "how many of your domains should be protected".</li>
+    <li><strong>How many Zone IDs do I enter?</strong> One for each domain that Zoraxy serves and that is on Cloudflare. Put the first in <em>Zone ID</em> and any
+      others in the same account under <em>More domains (zones) in this account</em>. Domains that live in a <em>different</em> Cloudflare account go on the
+      <em>Cloudflare Account 2</em> and <em>3</em> tabs.</li>
+  </ul>
 
   <h3>What it does</h3>
   <ul>
@@ -105,9 +130,13 @@
     <li>The <em>Recent actions</em> table at the bottom of this page. It shows the last 200 actions and survives restarts: it is restored
       from <code>zoraxy_actions.jsonl</code> next to the plugin binary (if it is empty after a restart, look for <code>history:</code>
       lines in the journal).</li>
-    <li>The Zoraxy journal, which keeps the full history: <code>journalctl -u zoraxy -f | grep -F "Zoraxy Cloudflare WAF plugin"</code>.
-      A "logtail: alive" line appears every 30 minutes and an "expiry:" line every hour, so "running, nothing to do" can be told from
-      "not running".</li>
+    <li>The Zoraxy journal, which keeps the full history: <code>journalctl -u zoraxy -f | grep -F "Zoraxy Cloudflare WAF plugin"</code>
+      (use the name of your own Zoraxy service if it is not <code>zoraxy</code>; in a container, read the container's log instead).
+      Two lines tell "running, nothing to do" from "not running": a <strong>"logtail: alive"</strong> line every 30 minutes, always, while the plugin runs;
+      and, <strong>only while live</strong> (Enabled on, Dry run off, expiry period above 0), an <strong>"expiry:"</strong> line every hour, the first about two
+      minutes after the plugin starts, with one per Cloudflare account list when you use several accounts. In dry run, or with expiry set to 0, there are no
+      "expiry:" lines, and that is normal.</li>
+    <li>If you have switched any scanner-path family off, a <strong>WARNING</strong> line naming it is written when the plugin starts and every time you save.</li>
   </ul>
 
   <h3>Names — two different fields</h3>
@@ -131,8 +160,20 @@
     <li>Zoraxy-side bans only block if the access rule's blacklist is switched on <strong>and</strong> Zoraxy sees the visitor's real address
       (behind a tunnel, add the tunnel's addresses to Zoraxy's trusted proxies and turn on "Trust proxy headers only"). Otherwise the ban is
       accepted and silently does nothing.</li>
-    <li>One Cloudflare account and one zone per plugin instance. For more zones in the same account, add the rule
-      <code>ip.src in $&lt;your list name&gt;</code> by hand in each; the plugin keeps the list current.</li>
+    <li><strong>Several Cloudflare accounts and domains (zones).</strong> Use the tabs <em>Cloudflare Account 1, 2 and 3</em>.
+      Each tab is a separate Cloudflare account with its own API token, Account ID, IP list name, rule name and <em>block action</em>
+      (for example block on one account and managed challenge on another), and up to five zones (domains) per account, so up to fifteen domains in all.
+      <ol>
+        <li>Fill in Cloudflare Account 1 exactly as before (token, Account ID, Zone ID; put any further domains (zones) of that account in
+          <em>More domains (zones) in this account</em>, one Zone ID per line). Nothing changes if you only use one account.</li>
+        <li>For each further account open its tab, tick <em>Enabled</em> on that tab, then enter its token, Account ID and the Zone ID of each of its domains. A tab you
+          leave blank is ignored and not stored. Use <em>Test</em> on each tab: it checks every zone of that account separately.</li>
+        <li>The master <em>Enabled</em> and <em>Dry run</em> switches at the top apply to all accounts. Start with Dry run on.</li>
+        <li>When an IP is blocked it goes to every enabled account and zone. If one account fails (bad token, list full, rule name taken) the
+          others are still protected: the action shows as <em>partial</em> and the detail names the account that failed. The Cloudflare Free
+          plan allows one IP list per account, so each account uses a single list; every domain (zone) needs one free custom-rule slot in its <em>Security → WAF → Custom rules</em>.</li>
+        <li>Expiry removes entries from every account's list after the expiry period, as before, and only entries this plugin added.</li>
+      </ol></li>
     <li>There is no "unblock this IP" button: remove the address from the Cloudflare list and from the Zoraxy access rules by hand.</li>
     <li>Changes to the log directory or detection thresholds need the plugin to be restarted.</li>
   </ul>
@@ -173,8 +214,25 @@
     <input type="number" id="threshold" min="1">
   </fieldset>
 
+  <fieldset id="probeFieldset">
+    <legend>Scanner path detection (takes effect on save, no restart)</legend>
+    <div class="limits" style="margin-bottom:0.5rem">Each ticked family below bans a client that asks for one of its paths, <strong>whatever the response status</strong>.
+      Untick a family only if an application you run behind the proxy legitimately serves those paths: its visitors would otherwise be banned.
+      These switches change <strong>this plugin only</strong> — a Cloudflare edge rule that also blocks the same paths (for example your WAF rule for known probe paths)
+      has to be changed separately.</div>
+    <div id="probeCats"></div>
+    <div id="probeOffWarning" class="banner warn" style="display:none"></div>
+    <label for="probeAllow">Never ban these paths (one per line)</label>
+    <textarea id="probeAllow" rows="4" spellcheck="false" placeholder="/types/credentials.json&#10;/myapp/*"></textarea>
+    <div class="limits">An exact path, or a prefix ending in <code>*</code> (for example <code>/myapp/*</code>), starting with <code>/</code>. Matched on the request path as received, ignoring the
+      query string. A listed path is skipped by <strong>every</strong> family above. It does not affect exploit patterns (path traversal, injection) or the 4xx/5xx threshold.
+      A bare <code>/*</code> is refused. Save fails with a message if an entry is not valid.</div>
+  </fieldset>
+
+  <div id="acctTabs" class="tabs"></div>
+  <div id="panel0">
   <fieldset>
-    <legend>Cloudflare</legend>
+    <legend>Cloudflare Account 1</legend>
     <div id="credStatus" class="limits" style="margin-bottom:0.5rem"></div>
     <label for="apiToken">API token</label>
     <div class="secret-row">
@@ -184,7 +242,7 @@
     <div class="limits">
       Needs a scoped token (never the Global API Key) with exactly two permissions:
       <code>Account → Account Filter Lists → Edit</code> and <code>Zone → WAF → Edit</code>, scoped to this account
-      and this zone. Create one at
+      and to your domain (zone). Create one at
       <code>https://dash.cloudflare.com/profile/api-tokens</code>
       → "Create Custom Token".
     </div>
@@ -193,13 +251,18 @@
       <input type="password" id="accountId" autocomplete="new-password" spellcheck="false">
       <button type="button" class="reveal" data-target="accountId">Show</button>
     </div>
-    <label for="zoneId">Zone ID</label>
+    <label for="zoneId">Zone ID (the ID of your domain in Cloudflare)</label>
     <div class="secret-row">
       <input type="password" id="zoneId" autocomplete="new-password" spellcheck="false">
       <button type="button" class="reveal" data-target="zoneId">Show</button>
     </div>
-    <div class="limits">Both IDs are on the zone's Overview page in the Cloudflare dashboard, right-hand sidebar. They are masked
+    <div class="limits">A zone is one domain (for example example.com). Both IDs are on that domain's <em>Overview</em> page in the Cloudflare dashboard, right-hand column (scroll down to <em>API</em>). They are masked
       like the token (safer on a shared screen) — use <em>Show</em> to check them; they re-hide after 15 seconds.</div>
+    <label for="extraZoneIds">More domains (zones) in this account (optional — one Zone ID per line, up to four; each domain gets the same rule, list and action)</label>
+    <textarea id="extraZoneIds" rows="3" spellcheck="false" autocomplete="off"></textarea>
+    <button type="button" id="testAllZonesBtn" class="secondary">Test all domains (zones) of this account</button>
+    <span id="testAllStatus"></span>
+    <div id="testAllResult" class="banner" style="display:none;margin-top:0.5rem"></div>
 
     <button type="button" id="testBtn" class="secondary">Test Connection</button>
     <span id="testStatus"></span>
@@ -236,6 +299,8 @@
       below instead of erroring.
     </div>
   </fieldset>
+  </div>
+  <div id="targetPanels"></div>
 
   <fieldset id="zoraxyFieldset">
     <legend>Zoraxy's own blacklist (optional second layer)</legend>
@@ -314,9 +379,15 @@ window.addEventListener("blur", hideSecrets);
 
 let zoraxyBanSaved = false;   // the saved config runs the Zoraxy layer (which can work without Cloudflare credentials)
 
+let extraConfigured = false;  // an additional account is saved, enabled and complete
+
+function anyExtraConfigured(cfg) {
+  return (cfg.additional_targets || []).some(t => t.enabled && t.cloudflare_api_token && t.cloudflare_account_id && (t.zone_ids || []).length);
+}
+
 function updateEnabledGate(configured) {
   const enabledBox = document.getElementById("enabled");
-  const unlocked = configured || lastTestPassed || zoraxyBanSaved;
+  const unlocked = configured || extraConfigured || lastTestPassed || zoraxyBanSaved;
   enabledBox.disabled = !unlocked;
   document.getElementById("setupBanner").style.display = unlocked ? "none" : "block";
 }
@@ -383,6 +454,63 @@ function loadZoraxyRules() {
   }).catch(e => { status.textContent = "⚠ " + e.message; });
 }
 
+// Probe families: id = the label the plugin uses in a ban reason (must match logtail.ProbeCategories; a Go test checks this list).
+const PROBE_CATEGORIES = [
+  { id: "vcs", text: "Version-control folders", ex: "/.git, /.svn, /.hg" },
+  { id: "dotenv", text: "Environment files", ex: "/.env and variants" },
+  { id: "tool-or-cloud-dir", text: "Tool and cloud folders", ex: "/.aws, /.docker, /.kube, /.ssh, /.azure, /.gcloud, /.config, /.anthropic, /.vscode, /.idea" },
+  { id: "credential-dotfile", text: "Credential dotfiles", ex: ".netrc, .npmrc, .pypirc, .htpasswd, .htaccess, .bash_history, .DS_Store; at the site root: .boto, .s3cfg, .amplifyrc" },
+  { id: "agent-config", text: "AI-coding-agent configuration (site root only)", ex: "/.claude, /.cursor, /.mcp.json" },
+  { id: "ci-config", text: "CI definitions (site root only)", ex: "/.github/, /.gitlab/, /.circleci/, /.gitlab-ci.yml, /.travis.yml" },
+  { id: "credential-file", text: "Files named like credentials", ex: "credentials.json, client_secret…, service-account…" },
+  { id: "ssh-key", text: "SSH private keys", ex: "id_rsa, id_ed25519, id_ecdsa" },
+  { id: "exploit-endpoints", text: "Known exploit endpoints", ex: "/vendor/phpunit/…, /_ignition/, /debug/default/, /vendor/laravel-filemanager, /wp-json/gravitysmtp/, scanner canary paths (…-notfound)" },
+  { id: "php-diagnostics", text: "PHP diagnostics pages", ex: "phpinfo.php, php-info.php, /phpinfo, /info.php (root only), /_profiler/phpinfo" },
+  { id: "panel-and-debug", text: "Hosting-panel and debug endpoints (site root only)", ex: "/___proxy_subdomain_cpanel, /server-status, /_profiler, /telescope/requests, /trace.axd, /@vite/env" },
+];
+
+function renderProbeCats(disabled) {
+  const off = new Set(disabled || []);
+  const box = document.getElementById("probeCats");
+  box.innerHTML = "";
+  PROBE_CATEGORIES.forEach(c => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.id = "probe_" + c.id;
+    cb.dataset.probe = c.id;
+    cb.checked = !off.has(c.id);
+    const lab = document.createElement("label");
+    lab.htmlFor = cb.id;
+    lab.textContent = c.text + " — " + c.ex;
+    row.appendChild(cb);
+    row.appendChild(lab);
+    box.appendChild(row);
+    cb.addEventListener("change", updateProbeWarning);
+  });
+  updateProbeWarning();
+}
+
+function currentProbeDisabled() {
+  return Array.from(document.querySelectorAll("#probeCats input[type=checkbox]")).filter(cb => !cb.checked).map(cb => cb.dataset.probe);
+}
+
+function updateProbeWarning() {
+  const off = currentProbeDisabled();
+  const w = document.getElementById("probeOffWarning");
+  if (off.length) {
+    w.textContent = "Switched off: " + off.join(", ") + ". Clients asking for those paths will not be banned by this plugin.";
+    w.style.display = "block";
+  } else {
+    w.style.display = "none";
+  }
+}
+
+function currentProbeAllow() {
+  return document.getElementById("probeAllow").value.split("\n").map(x => x.trim()).filter(x => x !== "");
+}
+
 function fillForm(cfg) {
   document.getElementById("enabled").checked = !!cfg.enabled;
   document.getElementById("dryRun").checked = !!cfg.dry_run;
@@ -396,6 +524,8 @@ function fillForm(cfg) {
   document.getElementById("logDir").value = cfg.zoraxy_log_dir || "";
   document.getElementById("windowSeconds").value = cfg.ratelimit_window_seconds || 60;
   document.getElementById("threshold").value = cfg.ratelimit_threshold || 30;
+  renderProbeCats(cfg.probe_disabled_categories);
+  document.getElementById("probeAllow").value = (cfg.probe_allow_paths || []).join("\n");
   document.getElementById("apiToken").placeholder = cfg.cloudflare_api_token ? "currently set — leave blank to keep it" : "not set";
   document.getElementById("accountId").value = cfg.cloudflare_account_id || "";
   document.getElementById("zoneId").value = cfg.cloudflare_zone_id || "";
@@ -421,6 +551,9 @@ function fillForm(cfg) {
     "Stored on the server — API token: " + mark(cfg.cloudflare_api_token) +
     " · Account ID: " + mark(cfg.cloudflare_account_id) + " · Zone ID: " + mark(cfg.cloudflare_zone_id);
 
+  document.getElementById("extraZoneIds").value = (cfg.extra_zone_ids || []).join("\n");
+  extraConfigured = anyExtraConfigured(cfg);
+  fillTargets(cfg);
   const configured = !!(cfg.cloudflare_api_token && cfg.cloudflare_account_id && cfg.cloudflare_zone_id);
   updateEnabledGate(configured);
 }
@@ -469,8 +602,10 @@ function refresh(fillFields) {
     } else {
       const cfg = data.config;
       zoraxyBanSaved = !!cfg.zoraxy_ban_enabled;
+      extraConfigured = anyExtraConfigured(cfg);
       updateEnabledGate(!!(cfg.cloudflare_api_token && cfg.cloudflare_account_id && cfg.cloudflare_zone_id));
     }
+    showRcBanner(data.build_label);
     fillHistory(data.history);
   }).catch(e => console.error(e));
 }
@@ -583,6 +718,8 @@ document.getElementById("saveBtn").addEventListener("click", () => {
     zoraxy_log_dir: document.getElementById("logDir").value,
     ratelimit_window_seconds: parseInt(document.getElementById("windowSeconds").value, 10) || 60,
     ratelimit_threshold: parseInt(document.getElementById("threshold").value, 10) || 30,
+    probe_disabled_categories: currentProbeDisabled(),
+    probe_allow_paths: currentProbeAllow(),
     cloudflare_api_token: document.getElementById("apiToken").value,
     cloudflare_account_id: document.getElementById("accountId").value,
     cloudflare_zone_id: document.getElementById("zoneId").value,
@@ -590,6 +727,8 @@ document.getElementById("saveBtn").addEventListener("click", () => {
     rule_description: document.getElementById("ruleDescription").value,
     block_action: document.getElementById("blockAction").value,
     max_ip_list_items: parseInt(document.getElementById("maxListItems").value, 10) || 10000,
+    extra_zone_ids: splitLines(document.getElementById("extraZoneIds").value),
+    additional_targets: collectTargets(),
   };
   fetch("api/config", { method: "POST", headers: withCsrf({ "Content-Type": "application/json" }), body: JSON.stringify(payload) })
     .then(readResponse)
@@ -602,6 +741,7 @@ document.getElementById("saveBtn").addEventListener("click", () => {
       }
       fillForm(res.body);
       document.getElementById("apiToken").value = ""; // stored now; the placeholder shows it's set
+      [1, 2].forEach(n => { document.getElementById("t" + n + "_token").value = ""; });
       const when = new Date().toLocaleTimeString();
       saveStatus.textContent = "✓ Saved at " + when;
       showSaveBanner(true, "✓ Settings saved at " + when + (res.body.enabled ? " — plugin is ENABLED" : " — plugin is not enabled yet") +
@@ -610,6 +750,173 @@ document.getElementById("saveBtn").addEventListener("click", () => {
     .catch(e => { const msg = "Save failed - " + e.message; saveStatus.textContent = msg; showSaveBanner(false, msg); })
     .finally(() => { saveBtn.disabled = false; });
 });
+
+// ---- several accounts: tabs, one panel per additional account ----
+const ACTIONS = [["block", "block — hard block"], ["managed_challenge", "managed_challenge — Cloudflare picks a challenge"],
+  ["js_challenge", "js_challenge — passive JavaScript check"], ["challenge", "challenge — interactive challenge"], ["log", "log — record only (Enterprise only)"]];
+
+function splitLines(text) { return text.split(/[\s,]+/).map(x => x.trim()).filter(Boolean); }
+
+function mk(tag, props, kids) {
+  const e = document.createElement(tag);
+  Object.entries(props || {}).forEach(([k, v]) => { if (k === "text") e.textContent = v; else if (k === "class") e.className = v; else e.setAttribute(k, v); });
+  (kids || []).forEach(k => e.appendChild(k));
+  return e;
+}
+function field(id, labelText, input) { return [mk("label", { for: id, text: labelText }), input]; }
+function secret(id, placeholder) {
+  const input = mk("input", { type: "password", id, autocomplete: "new-password", spellcheck: "false", placeholder: placeholder || "" });
+  const btn = mk("button", { type: "button", class: "reveal", "data-target": id, text: "Show" });
+  btn.addEventListener("click", () => setReveal(btn, input.type === "password"));
+  return mk("div", { class: "secret-row" }, [input, btn]);
+}
+
+function buildTargetPanel(n) {
+  const p = "t" + n + "_";
+  const legend = mk("legend", { text: "Cloudflare Account " + (n + 1) });
+  const fs = mk("fieldset", {}, [legend]);
+  const enabled = mk("input", { type: "checkbox", id: p + "enabled" });
+  fs.appendChild(mk("div", { class: "row" }, [enabled, mk("label", { for: p + "enabled", text: "Enabled for this account (the master Enabled and Dry run switches above also apply)" })]));
+  field(p + "label", "Tab name (shown in the action log, up to 30 characters)", mk("input", { type: "text", id: p + "label", maxlength: "30" })).forEach(x => fs.appendChild(x));
+  field(p + "token", "API token (this account's own; leave blank to keep the stored one)", secret(p + "token")).forEach(x => fs.appendChild(x));
+  fs.appendChild(mk("div", { class: "limits", text: "Same two permissions as Cloudflare Account 1 (Account Filter Lists: Edit, Zone WAF: Edit), scoped to this account and its domains (zones)." }));
+  field(p + "account", "Account ID", secret(p + "account")).forEach(x => fs.appendChild(x));
+  field(p + "zones", "Zone IDs: one per domain, one per line, up to five domains", mk("textarea", { id: p + "zones", rows: "3", spellcheck: "false", autocomplete: "off" })).forEach(x => fs.appendChild(x));
+  const test = mk("button", { type: "button", class: "secondary", id: p + "test", text: "Test this account" });
+  const tstatus = mk("span", { id: p + "tstatus" });
+  const tout = mk("div", { class: "banner", id: p + "tout", style: "display:none;margin-top:0.5rem" });
+  fs.appendChild(test); fs.appendChild(tstatus); fs.appendChild(tout);
+  test.addEventListener("click", () => runTargetTest(n, tstatus, tout));
+  field(p + "list", "IP list name (each account has its own list and its own list quota)", mk("input", { type: "text", id: p + "list" })).forEach(x => fs.appendChild(x));
+  field(p + "rule", "WAF rule name", mk("input", { type: "text", id: p + "rule" })).forEach(x => fs.appendChild(x));
+  const sel = mk("select", { id: p + "action" }, ACTIONS.map(a => mk("option", { value: a[0], text: a[1] })));
+  field(p + "action", "Block action for this account", sel).forEach(x => fs.appendChild(x));
+  field(p + "max", "Max IP list items (this plugin's own pre-flight cap)", mk("input", { type: "number", id: p + "max", min: "1" })).forEach(x => fs.appendChild(x));
+  fs.appendChild(mk("div", { id: p + "status", class: "limits", style: "margin-top:0.5rem" }));
+  const panel = mk("div", { id: "panel" + n, style: "display:none" }, [fs]);
+  return panel;
+}
+
+let activeTab = 0;
+const tabNames = ["Cloudflare Account 1", "Cloudflare Account 2", "Cloudflare Account 3"];
+
+function renderTabs() {
+  const bar = document.getElementById("acctTabs");
+  bar.textContent = "";
+  tabNames.forEach((name, i) => {
+    const b = mk("button", { type: "button", class: i === activeTab ? "active" : "", text: name });
+    const dot = mk("span", { class: "dot" + (tabOn[i] ? " on" : ""), title: tabOn[i] ? "in use" : "not in use" });
+    b.appendChild(dot);
+    b.addEventListener("click", () => { activeTab = i; renderTabs(); });
+    bar.appendChild(b);
+  });
+  for (let i = 0; i <= 2; i++) document.getElementById("panel" + i).style.display = i === activeTab ? "block" : "none";
+}
+const tabOn = [true, false, false];
+
+function fillTargets(cfg) {
+  [1, 2].forEach(n => {
+    const t = (cfg.additional_targets || [])[n - 1] || {};
+    const p = "t" + n + "_";
+    document.getElementById(p + "enabled").checked = !!t.enabled;
+    document.getElementById(p + "label").value = t.label || "";
+    document.getElementById(p + "token").placeholder = t.cloudflare_api_token ? "currently set — leave blank to keep it" : "not set";
+    document.getElementById(p + "account").value = t.cloudflare_account_id || "";
+    document.getElementById(p + "zones").value = (t.zone_ids || []).join("\n");
+    document.getElementById(p + "list").value = t.ip_list_name || "";
+    document.getElementById(p + "rule").value = t.rule_description || "";
+    document.getElementById(p + "action").value = t.block_action || "block";
+    document.getElementById(p + "max").value = t.max_ip_list_items || 10000;
+    const mark = v => v ? "✓ saved" : "✗ not saved";
+    document.getElementById(p + "status").textContent = "Stored on the server — API token: " + mark(t.cloudflare_api_token) + " · Account ID: " + mark(t.cloudflare_account_id) + " · Zones: " + (t.zone_ids || []).length;
+    tabNames[n] = t.label || "Cloudflare Account " + (n + 1);
+    tabOn[n] = !!(t.enabled && t.cloudflare_api_token && t.cloudflare_account_id && (t.zone_ids || []).length);
+  });
+  tabOn[0] = !!(cfg.cloudflare_api_token && cfg.cloudflare_account_id && cfg.cloudflare_zone_id);
+  renderTabs();
+}
+
+function collectTargets() {
+  const out = [];
+  [1, 2].forEach(n => {
+    const p = "t" + n + "_";
+    const v = id => document.getElementById(p + id).value;
+    const t = {
+      label: v("label").trim(), enabled: document.getElementById(p + "enabled").checked, cloudflare_api_token: v("token"),
+      cloudflare_account_id: v("account").trim(), zone_ids: splitLines(v("zones")), ip_list_name: v("list").trim(),
+      rule_description: v("rule").trim(), block_action: v("action"), max_ip_list_items: parseInt(v("max"), 10) || 10000,
+    };
+    const used = t.label || t.enabled || t.cloudflare_api_token || t.cloudflare_account_id || t.zone_ids.length || t.ip_list_name || t.rule_description;
+    out.push({ t, used: !!used });
+  });
+  // keep tab positions: send up to the last tab that has anything in it
+  let last = -1; out.forEach((o, i) => { if (o.used) last = i; });
+  return out.slice(0, last + 1).map(o => o.t);
+}
+
+function renderZoneReports(body, box, listName, ruleName) {
+  const lines = [];
+  (body.reports || []).forEach((zr, i) => {
+    const r = zr.report || {};
+    const z = "zone " + String(zr.zone_id).slice(0, 8) + "…";
+    if (i === 0) {
+      lines.push(r.token_valid ? "✓ Token is valid" : "✗ Token invalid: " + (r.token_error || ""));
+      lines.push(r.lists_access ? "✓ Can manage IP lists (Account Filter Lists)" : "✗ " + (r.lists_error || "no list access"));
+      if (r.lists_access) lines.push("ℹ This account has " + r.list_count + " custom list(s); the list \"" + listName + "\" " + (r.list_exists ? "exists" : "does not exist yet (created on the first real block; the account's list quota applies)") + ".");
+    }
+    lines.push(r.waf_access ? "✓ " + z + ": can manage WAF custom rules — " + r.rule_count + " custom rule(s) already" + (r.rule_count >= 5 ? " (Free allows 5: adding a rule may fail)" : "")
+      : "✗ " + z + ": " + (r.waf_error || "no WAF access"));
+    if (r.rule_name_conflict) lines.push("⚠ " + z + ": a rule named \"" + ruleName + "\" already exists and is not this plugin's; it will not be changed and this zone would not be protected.");
+  });
+  const bad = lines.some(l => l.startsWith("✗"));
+  const warn = lines.some(l => l.startsWith("⚠"));
+  box.className = "banner " + (bad ? "error" : warn ? "warn" : "ok");
+  box.textContent = "";
+  lines.forEach((l, i) => { if (i) box.appendChild(document.createElement("br")); box.appendChild(document.createTextNode(l)); });
+  box.style.display = "block";
+  return !bad;
+}
+
+function postTargetTest(payload, statusEl, box, listName, ruleName) {
+  statusEl.textContent = "Testing...";
+  return fetch("api/test-target", { method: "POST", headers: withCsrf({ "Content-Type": "application/json" }), body: JSON.stringify(payload) })
+    .then(readResponse).then(res => {
+      statusEl.textContent = "";
+      if (!res.ok || !res.body) { box.className = "banner error"; box.textContent = describeFailure(res); box.style.display = "block"; return false; }
+      return renderZoneReports(res.body, box, listName, ruleName);
+    }).catch(e => { statusEl.textContent = ""; box.className = "banner error"; box.textContent = e.message; box.style.display = "block"; return false; });
+}
+
+function runTargetTest(n, statusEl, box) {
+  const p = "t" + n + "_";
+  const v = id => document.getElementById(p + id).value;
+  const payload = { index: n, cloudflare_api_token: v("token"), cloudflare_account_id: v("account").trim(), zone_ids: splitLines(v("zones")),
+    ip_list_name: v("list").trim(), rule_description: v("rule").trim() };
+  postTargetTest(payload, statusEl, box, payload.ip_list_name || "zoraxy_cf_waf_blocklist", payload.rule_description || "the plugin's rule");
+}
+
+document.getElementById("testAllZonesBtn").addEventListener("click", () => {
+  const zones = [document.getElementById("zoneId").value.trim()].concat(splitLines(document.getElementById("extraZoneIds").value)).filter(Boolean);
+  const payload = { index: 0, cloudflare_api_token: document.getElementById("apiToken").value, cloudflare_account_id: document.getElementById("accountId").value.trim(),
+    zone_ids: zones, ip_list_name: document.getElementById("listName").value.trim(), rule_description: document.getElementById("ruleDescription").value.trim() };
+  postTargetTest(payload, document.getElementById("testAllStatus"), document.getElementById("testAllResult"), payload.ip_list_name, payload.rule_description);
+});
+
+function showRcBanner(label) {
+  const b = document.getElementById("rcBanner");
+  if (!label) { b.style.display = "none"; return; }
+  b.textContent = "RELEASE CANDIDATE " + label + " — for testing, not for production. This build adds support for several Cloudflare accounts and zones and has not been proven in " +
+    "production. If you run it on a live proxy you do so at your own risk: keep a copy of cloudflarewaf.json and of the previous plugin binary first. " +
+    "To go back, put both back and restart Zoraxy (older versions ignore the new settings). Please report what you find in the issue tracker, without tokens or IDs.";
+  b.style.display = "block";
+}
+
+// the panels for the additional accounts are built once, after the primary panel
+(function () {
+  const host = document.getElementById("targetPanels");
+  [1, 2].forEach(n => host.appendChild(buildTargetPanel(n)));
+  renderTabs();
+})();
 
 document.getElementById("zoraxyRefresh").addEventListener("click", loadZoraxyRules);
 refresh(true);

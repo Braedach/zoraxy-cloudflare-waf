@@ -6,7 +6,6 @@ package blocker
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -49,6 +48,10 @@ type Deps struct {
 	SetManagedRuleID   func(id string) // persists the rule ID EnsureBlockRule returns, so future syncs match by ID
 	GetMaxListItems    func() int
 	NewCFClient        func() (*cloudflare.Client, bool) // ok=false if credentials aren't configured yet
+
+	// GetTargets, when set, replaces the single-target dependencies above with several Cloudflare targets (accounts and zones).
+	// Unset, the plugin behaves exactly as a single-account install always has.
+	GetTargets func() []Target
 
 	// Optional layers (nil = behave as if off): block expiry, and bans in Zoraxy's own blacklist.
 	GetExpiryDays       func() int
@@ -134,11 +137,22 @@ const (
 	layerOK                         // done
 	layerFailed                     // tried and failed
 	layerListFull                   // Cloudflare list at the plugin's own cap (Cloudflare layer only)
+	layerPartial                    // Cloudflare layer worked for some targets or zones and not for others
 )
 
 type layerResult struct {
 	state  layerState
 	detail string
+}
+
+// dryRunTargets names the list(s) a dry run would have added to.
+func (b *Blocker) dryRunTargets() string {
+	ts := b.targets()
+	names := make([]string, 0, len(ts))
+	for _, t := range ts {
+		names = append(names, targetName(t))
+	}
+	return strings.Join(names, ", ")
 }
 
 func (b *Blocker) zoraxyEnabled() bool {
@@ -194,7 +208,7 @@ func (b *Blocker) Submit(ctx context.Context, c Candidate) {
 
 	if b.deps.GetDryRun() {
 		action.Result = "dry-run"
-		action.Detail = "would have added to " + b.deps.GetIPListName()
+		action.Detail = "would have added to " + b.dryRunTargets()
 		if b.zoraxyEnabled() {
 			action.Detail += "; would ban in Zoraxy access rule(s): " + strings.Join(b.zoraxyRules(), ", ")
 		}
@@ -223,6 +237,8 @@ func combine(cf, zx layerResult) (result, detail string) {
 			return "blocked", cf.detail
 		case layerListFull:
 			return "skipped-list-full", cf.detail
+		case layerPartial:
+			return "partial", cf.detail
 		default:
 			return "error", cf.detail
 		}
@@ -236,12 +252,13 @@ func combine(cf, zx layerResult) (result, detail string) {
 	detail = strings.Join(parts, "; ")
 
 	cfGood := cf.state == layerOK
+	cfSome := cf.state == layerPartial
 	cfAbsent := cf.state == layerOff
 	zxGood := zx.state == layerOK
 	switch {
 	case zxGood && (cfGood || cfAbsent):
 		return "blocked", detail
-	case zxGood || cfGood:
+	case zxGood || cfGood || cfSome:
 		return "partial", detail
 	default:
 		return "error", detail
@@ -253,53 +270,6 @@ func orOK(s string) string {
 		return "ok"
 	}
 	return s
-}
-
-// blockAtCloudflare: ensure list -> size guard -> ensure rule -> add IP. Caller holds cfMu.
-func (b *Blocker) blockAtCloudflare(ctx context.Context, ip string, c Candidate) layerResult {
-	client, ok := b.deps.NewCFClient()
-	if !ok {
-		return layerResult{state: layerOff, detail: "cloudflare credentials not configured"}
-	}
-
-	listID, err := client.EnsureIPList(ctx, b.deps.GetIPListName())
-	if err != nil {
-		return layerResult{state: layerFailed, detail: err.Error()}
-	}
-
-	// Pre-flight against Cloudflare's list-size cap (Free/Pro/Business: 10,000 items
-	// total across all custom lists - see Config.MaxIPListItems). Checked live, right
-	// before the add, rather than cached: blocks are rare enough (thanks to the dedup
-	// TTL) that one extra read here per real block is cheap, and it's always
-	// accurate rather than staleness-prone.
-	if count, err := client.ListIPListItemCount(ctx, listID); err != nil {
-		log.Printf("block %s: list size check failed (continuing anyway): %v", ip, err)
-	} else if max := b.deps.GetMaxListItems(); max > 0 && count >= max {
-		return layerResult{state: layerListFull, detail: fmt.Sprintf("list %s has %d/%d items", b.deps.GetIPListName(), count, max)}
-	}
-
-	if newRuleID, err := client.EnsureBlockRule(ctx, b.deps.GetIPListName(), b.deps.GetBlockAction(), b.deps.GetRuleDescription(), b.deps.GetManagedRuleID()); err != nil {
-		var conflict *cloudflare.RuleConflictError
-		if errors.As(err, &conflict) {
-			// Someone else's rule has our name. We won't touch it, and adding IPs to a list nothing
-			// references would only look like protection - report it loudly instead.
-			return layerResult{state: layerFailed, detail: err.Error()}
-		}
-		// Non-fatal: the list membership below still protects, just via whatever rule
-		// (if any) already references this list. Surface it, don't abort the add.
-		log.Printf("block %s: ensure rule (continuing anyway): %v", ip, err)
-	} else if newRuleID != b.deps.GetManagedRuleID() {
-		b.deps.SetManagedRuleID(newRuleID)
-	}
-
-	comment := fmt.Sprintf("zoraxy/%s: %s", c.Source, c.Reason)
-	if len(comment) > 100 { // Cloudflare list item comments are capped
-		comment = comment[:100]
-	}
-	if err := client.AddIP(ctx, listID, ip, comment); err != nil {
-		return layerResult{state: layerFailed, detail: err.Error()}
-	}
-	return layerResult{state: layerOK}
 }
 
 // banInZoraxy adds the IP to the blacklist of every selected Zoraxy access rule and remembers it for expiry.
@@ -411,12 +381,13 @@ func uniqueInOrder(in []string) []string {
 	return out
 }
 
-func (b *Blocker) pruneCloudflare(ctx context.Context, cutoff time.Time, days int) []string {
-	client, ok := b.deps.NewCFClient()
+// pruneTarget is the expiry pass for one Cloudflare target's list.
+func (b *Blocker) pruneTarget(ctx context.Context, t Target, cutoff time.Time, days int) []string {
+	client, ok := t.NewClient(t.Zones[0])
 	if !ok {
 		return nil
 	}
-	listID, found, err := client.FindIPList(ctx, b.deps.GetIPListName())
+	listID, found, err := client.FindIPList(ctx, t.IPListName)
 	if err != nil {
 		log.Printf("expiry: cloudflare: %v (nothing removed)", err)
 		return nil
@@ -475,7 +446,7 @@ func (b *Blocker) pruneCloudflare(ctx context.Context, cutoff time.Time, days in
 		}
 	}
 	if len(removed) > 0 {
-		log.Printf("expiry: removed %d Cloudflare list item(s) not renewed for %d days from %s", len(removed), days, b.deps.GetIPListName())
+		log.Printf("expiry: removed %d Cloudflare list item(s) not renewed for %d days from %s", len(removed), days, targetName(t))
 	}
 	return removed
 }
