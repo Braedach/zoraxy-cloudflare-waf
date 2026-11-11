@@ -8,8 +8,10 @@ settings (`/.claude/settings.json`, `/.cursor/mcp.json`) and CI definitions (`/.
 request, but not these, so the sweep ran on until a path it did know arrived.
 - New sensitive-path families, banned on the first request like the existing ones: **agent-config** (`/.claude…`, `/.cursor…`, `/.mcp.json`),
   **ci-config** (`/.github/`, `/.gitlab/`, `/.circleci/`, `/.gitlab-ci.yml`, `/.travis.yml`) and three more credential dotfiles (`.boto`, `.s3cfg`, `.amplifyrc`).
-- `/.github/workflows/ci.yml` was listed as a path that must never be flagged. That was a precaution, not a requirement: no application served through the
-  proxy asks for it. It is now flagged, and the test list says so.
+- The new families match **at the site root only** (`/.github/…`, not `/owner/repo/src/branch/main/.github/…`), so a git forge such as Gitea, Forgejo or GitLab showing a
+  repository's own `.github`, `.claude` or `.gitlab-ci.yml` never gets its readers banned. Scanners ask at the root. Tests cover forge-style URLs.
+- `/.github/workflows/ci.yml` at the root was listed as a path that must never be flagged. That was a precaution, not a requirement: no application served through the
+  proxy asks for it there. It is now flagged, and the test list says so.
 - Still deliberately not flagged: bare `.php`, `phpinfo`, `wp-*`, `config.json`, `.zip/.bak/.sql`, `Dockerfile` and `docker-compose.yml`.
 - Detection, expiry and the Cloudflare/Zoraxy calls are otherwise unchanged. 17 new paths are tested at three response statuses; the tests fail without the change (51 failures).
 
