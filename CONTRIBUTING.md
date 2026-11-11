@@ -22,6 +22,8 @@ do not want public. Never paste `cloudflarewaf.json`. Security problems go throu
 4. **The Cloudflare write path has hard rules** (they are tested; keep them so): a failed read never leads to a write; the plugin never resends or edits a rule
    it did not create; it never removes a list item it did not add; expiry only removes what this plugin created. A change that weakens one will not be merged.
 5. **No secrets or private details** in code, tests, comments or commit messages: no real tokens, IDs, addresses or host names.
+   `scripts/leak-check.sh` checks this and also refuses a commit whose author or committer is a real email address; CI runs it on every pull request.
+   Commit with your GitHub **noreply** address (`git config user.email "<id>+<username>@users.noreply.github.com"`): a real address in a public commit is public for ever and ends up on spam lists. To run the check before every push: `printf '#!/bin/sh\nexec scripts/leak-check.sh\n' > .git/hooks/pre-push && chmod +x .git/hooks/pre-push`.
 6. Update `CHANGELOG.md` (what changed **and why**) and the README if behaviour changes. Do not bump the version or tag a release in a pull request; the
    maintainer does that.
 7. Keep commits small and the description honest about what is and is not verified.

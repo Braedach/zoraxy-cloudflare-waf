@@ -1,0 +1,28 @@
+name: Leak check
+
+# Stops private data (real email addresses, internal addresses, tokens, Cloudflare-style IDs) reaching this public repository,
+# including a real address as a commit author. The check prints rule names and locations, never the matched values.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  leak-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Self-test the checker
+        run: scripts/leak-check.test.sh
+      - name: Check the pull request (files and commit identities)
+        if: github.event_name == 'pull_request'
+        run: scripts/leak-check.sh --range "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+      - name: Check the files
+        if: github.event_name != 'pull_request'
+        run: scripts/leak-check.sh --files-only
