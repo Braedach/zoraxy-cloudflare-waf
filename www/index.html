@@ -87,7 +87,7 @@
       <em>one WAF rule per domain</em> (which blocks the addresses on that list). So "how many zones?" means "how many of your domains should be protected".</li>
     <li><strong>How many Zone IDs do I enter?</strong> One for each domain that Zoraxy serves and that is on Cloudflare. Put the first in <em>Zone ID</em> and any
       others in the same account under <em>More domains (zones) in this account</em>. Domains that live in a <em>different</em> Cloudflare account go on the
-      <em>Cloudflare Account 2</em> and <em>3</em> tabs (release candidate).</li>
+      <em>Cloudflare Account 2</em> and <em>3</em> tabs.</li>
   </ul>
 
   <h3>What it does</h3>
@@ -160,7 +160,7 @@
     <li>Zoraxy-side bans only block if the access rule's blacklist is switched on <strong>and</strong> Zoraxy sees the visitor's real address
       (behind a tunnel, add the tunnel's addresses to Zoraxy's trusted proxies and turn on "Trust proxy headers only"). Otherwise the ban is
       accepted and silently does nothing.</li>
-    <li><strong>Several Cloudflare accounts and zones (release candidate).</strong> Use the tabs <em>Cloudflare Account 1, 2 and 3</em>.
+    <li><strong>Several Cloudflare accounts and domains (zones).</strong> Use the tabs <em>Cloudflare Account 1, 2 and 3</em>.
       Each tab is a separate Cloudflare account with its own API token, Account ID, IP list name, rule name and <em>block action</em>
       (for example block on one account and managed challenge on another), and up to five zones (domains) per account, so up to fifteen domains in all.
       <ol>
@@ -751,7 +751,7 @@ document.getElementById("saveBtn").addEventListener("click", () => {
     .finally(() => { saveBtn.disabled = false; });
 });
 
-// ---- several accounts: tabs, one panel per additional account (release candidate) ----
+// ---- several accounts: tabs, one panel per additional account ----
 const ACTIONS = [["block", "block — hard block"], ["managed_challenge", "managed_challenge — Cloudflare picks a challenge"],
   ["js_challenge", "js_challenge — passive JavaScript check"], ["challenge", "challenge — interactive challenge"], ["log", "log — record only (Enterprise only)"]];
 
@@ -773,7 +773,7 @@ function secret(id, placeholder) {
 
 function buildTargetPanel(n) {
   const p = "t" + n + "_";
-  const legend = mk("legend", { text: "Cloudflare Account " + (n + 1) + " (release candidate)" });
+  const legend = mk("legend", { text: "Cloudflare Account " + (n + 1) });
   const fs = mk("fieldset", {}, [legend]);
   const enabled = mk("input", { type: "checkbox", id: p + "enabled" });
   fs.appendChild(mk("div", { class: "row" }, [enabled, mk("label", { for: p + "enabled", text: "Enabled for this account (the master Enabled and Dry run switches above also apply)" })]));

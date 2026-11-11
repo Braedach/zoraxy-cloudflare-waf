@@ -190,3 +190,14 @@ func TestSettingsPage_ExpiryLineIsOnlyPromisedWhileLive(t *testing.T) {
 		t.Errorf("the help must say that expiry: lines appear only while live")
 	}
 }
+
+// Only a release-candidate BUILD (a build label) may call itself one; the page text shipped in a stable release must not.
+func TestSettingsPage_StaticTextDoesNotCallItselfAReleaseCandidate(t *testing.T) {
+	page, err := wwwFS.ReadFile("www/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.ToLower(string(page)), "(release candidate)") {
+		t.Errorf("the settings page contains the fixed text \"(release candidate)\"; that must come only from the build label")
+	}
+}
